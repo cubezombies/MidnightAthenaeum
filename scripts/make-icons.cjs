@@ -46,17 +46,40 @@ async function main() {
 
   const emblem = img.clone().crop(x, y, side, side);
 
-  await emblem.clone().resize(1024, 1024, Jimp.RESIZE_BICUBIC).writeAsync(ICON_PNG);
-  console.log(`wrote ${ICON_PNG}`);
+  // Mask to a circular badge at high resolution: everything outside the
+  // inscribed circle goes transparent, with a 1px anti-aliased edge. Doing this
+  // once at 1024 and then downscaling gives every icon size a smooth circle.
+  const master = emblem.clone().resize(1024, 1024, Jimp.RESIZE_BICUBIC);
+  circularMask(master);
+
+  await master.clone().writeAsync(ICON_PNG);
+  console.log(`wrote ${ICON_PNG} (circular)`);
 
   const pngBuffers = [];
   for (const size of ICO_SIZES) {
-    const buf = await emblem.clone().resize(size, size, Jimp.RESIZE_BICUBIC).getBufferAsync(Jimp.MIME_PNG);
+    const buf = await master.clone().resize(size, size, Jimp.RESIZE_BICUBIC).getBufferAsync(Jimp.MIME_PNG);
     pngBuffers.push(buf);
   }
   fs.mkdirSync(path.dirname(ICO), { recursive: true });
   fs.writeFileSync(ICO, await pngToIco(pngBuffers));
   console.log(`wrote ${ICO} (${ICO_SIZES.join(', ')})`);
+}
+
+/** Make everything outside the inscribed circle transparent (anti-aliased). */
+function circularMask(img) {
+  const { width: w, height: h, data } = img.bitmap;
+  const cx = w / 2;
+  const cy = h / 2;
+  const r = Math.min(w, h) / 2 - 1; // tiny inset so the edge doesn't touch the bounds
+  img.scan(0, 0, w, h, (x, y, idx) => {
+    const dx = x + 0.5 - cx;
+    const dy = y + 0.5 - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    // coverage: 1 inside, 0 outside, ramp across the 1px boundary
+    const coverage = Math.max(0, Math.min(1, r - dist + 0.5));
+    if (coverage < 1) data[idx + 3] = Math.round(data[idx + 3] * coverage);
+  });
+  return img;
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });
