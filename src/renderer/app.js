@@ -3,6 +3,7 @@
 const $ = (id) => document.getElementById(id);
 
 const el = {
+  main: $('main'),
   grid: $('grid'), emptyState: $('emptyState'), search: $('search'),
   libraryView: $('libraryView'), bookView: $('bookView'),
   viewTitle: $('viewTitle'), backBtn: $('backBtn'), scanStatus: $('scanStatus'),
@@ -28,7 +29,11 @@ const state = {
   pendingSeek: null,   // position to apply once the loading track reports metadata
   activeChapter: -1,
   seeking: false,
+  filtered: [],        // books matching the current search
+  gridShown: 0,        // how many cards are currently in the DOM
 };
+
+let gridObserver = null;
 
 /* ---------------- helpers ---------------- */
 
@@ -53,64 +58,98 @@ function formatDurationLong(seconds) {
 
 /* ---------------- library grid ---------------- */
 
+const GRID_PAGE = 120;
+
+function buildCard(book) {
+  const saved = state.progress[book.id];
+  const pct = saved && book.duration
+    ? Math.min(100, (saved.position / book.duration) * 100)
+    : 0;
+
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+
+  const art = document.createElement('div');
+  art.className = 'card-art';
+  if (book.coverUrl) {
+    const img = document.createElement('img');
+    img.src = book.coverUrl;
+    img.alt = `${book.title} cover`;
+    img.loading = 'lazy';
+    art.append(img);
+  } else {
+    const ph = document.createElement('div');
+    ph.className = 'placeholder';
+    ph.textContent = '🎧';
+    art.append(ph);
+  }
+  if (pct > 0) {
+    const bar = document.createElement('div');
+    bar.className = 'card-bar';
+    const fill = document.createElement('span');
+    fill.style.width = `${pct}%`;
+    bar.append(fill);
+    art.append(bar);
+  }
+
+  const title = document.createElement('div');
+  title.className = 'card-title';
+  title.textContent = book.title;
+
+  const author = document.createElement('div');
+  author.className = 'card-author';
+  author.textContent = book.author;
+
+  card.append(art, title, author);
+  card.addEventListener('click', () => openBook(book.id));
+  card.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBook(book.id); }
+  });
+  return card;
+}
+
+/**
+ * A 10k-book library is far too many cards to put in the DOM at once (it costs
+ * ~2 GB). Render in pages and append the next one when a sentinel near the
+ * bottom scrolls into view, so the node count tracks how far the user has
+ * actually scrolled rather than the library size.
+ */
 function renderGrid() {
   const query = el.search.value.trim().toLowerCase();
-  const books = query
+  state.filtered = query
     ? state.books.filter((b) =>
         b.title.toLowerCase().includes(query) || b.author.toLowerCase().includes(query))
     : state.books;
 
   el.emptyState.classList.toggle('hidden', state.books.length > 0);
+  gridObserver?.disconnect();
   el.grid.replaceChildren();
+  state.gridShown = 0;
+  appendGridPage();
+}
 
-  for (const book of books) {
-    const saved = state.progress[book.id];
-    const pct = saved && book.duration
-      ? Math.min(100, (saved.position / book.duration) * 100)
-      : 0;
+function appendGridPage() {
+  const books = state.filtered;
+  const end = Math.min(state.gridShown + GRID_PAGE, books.length);
+  const frag = document.createDocumentFragment();
+  for (let i = state.gridShown; i < end; i += 1) frag.append(buildCard(books[i]));
+  el.grid.append(frag);
+  state.gridShown = end;
 
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.tabIndex = 0;
-    card.setAttribute('role', 'button');
-
-    const art = document.createElement('div');
-    art.className = 'card-art';
-    if (book.coverUrl) {
-      const img = document.createElement('img');
-      img.src = book.coverUrl;
-      img.alt = `${book.title} cover`;
-      img.loading = 'lazy';
-      art.append(img);
-    } else {
-      const ph = document.createElement('div');
-      ph.className = 'placeholder';
-      ph.textContent = '🎧';
-      art.append(ph);
-    }
-    if (pct > 0) {
-      const bar = document.createElement('div');
-      bar.className = 'card-bar';
-      const fill = document.createElement('span');
-      fill.style.width = `${pct}%`;
-      bar.append(fill);
-      art.append(bar);
-    }
-
-    const title = document.createElement('div');
-    title.className = 'card-title';
-    title.textContent = book.title;
-
-    const author = document.createElement('div');
-    author.className = 'card-author';
-    author.textContent = book.author;
-
-    card.append(art, title, author);
-    card.addEventListener('click', () => openBook(book.id));
-    card.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBook(book.id); }
-    });
-    el.grid.append(card);
+  if (end < books.length) {
+    const sentinel = document.createElement('div');
+    sentinel.className = 'grid-sentinel';
+    el.grid.append(sentinel);
+    gridObserver = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        gridObserver.disconnect();
+        sentinel.remove();
+        appendGridPage();
+      }
+    }, { root: el.main, rootMargin: '600px' });
+    gridObserver.observe(sentinel);
   }
 }
 
@@ -230,6 +269,19 @@ function globalTime() {
   return (track?.offset ?? 0) + local;
 }
 
+/**
+ * Whole-book length. A handful of files have unreadable headers so the scan
+ * stored duration 0; for a single-track book the <audio> element knows the real
+ * length once loaded, so fall back to that rather than showing a dead seek bar.
+ */
+function effectiveDuration(book) {
+  if (book?.duration) return book.duration;
+  if (book && book.tracks.length === 1 && Number.isFinite(el.audio.duration)) {
+    return el.audio.duration;
+  }
+  return 0;
+}
+
 function loadIntoPlayer(book) {
   if (state.playing?.id === book.id) return;
 
@@ -259,7 +311,7 @@ function seekTo(globalSeconds, { autoplay = null } = {}) {
   const book = state.playing;
   if (!book) return;
 
-  const total = book.duration || 0;
+  const total = effectiveDuration(book);
   const target = Math.max(0, total ? Math.min(globalSeconds, total - 0.5) : globalSeconds);
   const index = trackIndexAt(book, target);
   const track = book.tracks[index];
@@ -294,7 +346,7 @@ function seekTo(globalSeconds, { autoplay = null } = {}) {
 
 function updateTimeUI() {
   const book = state.playing;
-  const total = book?.duration || 0;
+  const total = effectiveDuration(book);
   const position = globalTime();
 
   el.timeCurrent.textContent = formatTime(position);
@@ -335,7 +387,7 @@ function flushProgress() {
   const position = globalTime();
   if (!Number.isFinite(position)) return;
 
-  const duration = book.duration || 0;
+  const duration = effectiveDuration(book);
   state.progress[book.id] = {
     position,
     duration,
@@ -379,7 +431,7 @@ window.addEventListener('beforeunload', flushProgress);
 
 el.seek.addEventListener('input', () => { state.seeking = true; });
 el.seek.addEventListener('change', () => {
-  const total = state.playing?.duration || 0;
+  const total = effectiveDuration(state.playing);
   state.seeking = false;
   if (total > 0) { seekTo((Number(el.seek.value) / 1000) * total); flushProgress(); }
 });

@@ -19,6 +19,14 @@ const SKIP_DIRS = new Set(['node_modules', '$RECYCLE.BIN', 'System Volume Inform
 const BOOK_CONCURRENCY = 4;
 const TRACK_CONCURRENCY = 8;
 
+// A folder of several self-contained files is ambiguous: it could be one book
+// split into short numbered parts (merge them) or a series folder of separate
+// full-length books that merely share a series-name album tag (keep them apart).
+// Per-file duration is what actually distinguishes the two — parts run minutes,
+// books run hours — so we merge only when the median file is short.
+const SELF_CONTAINED_EXT = new Set(['.m4b', '.m4a']);
+const PART_MEDIAN_MAX_SEC = 80 * 60;
+
 // music-metadata is ESM-only; this main process is CommonJS.
 let mmPromise = null;
 function loadMusicMetadata() {
@@ -116,6 +124,23 @@ function titleFromFileName(name) {
   return name.replace(/[_.]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// A file-level `title` tag that reads like a chapter marker ("Opening Credits",
+// "Chapter 1", "03 - …") is the first chapter leaking through, not the book name.
+const CHAPTER_LIKE = /(opening|end) credits|\bchapters?\b|\btrack\s*\d|\bprologue\b|\bepilogue\b|^\s*\d+\s*[-.]/i;
+
+/**
+ * Best display title for a self-contained book. Prefer the specific `title`
+ * (distinguishes volumes that share a series-name `album`), but fall back to
+ * `album` when `title` looks like a chapter and `album` doesn't.
+ */
+function pickBookTitle(common, fallbackName) {
+  const title = cleanText(common.title);
+  const album = cleanText(common.album);
+  if (title && !CHAPTER_LIKE.test(title)) return title;
+  if (album && !CHAPTER_LIKE.test(album)) return album;
+  return title || album || titleFromFileName(fallbackName);
+}
+
 /** Build a signature so an unchanged book can be reused from cache. */
 function unitSignature(stats) {
   return stats.map((s) => `${s.filePath}:${s.mtimeMs}:${s.size}`).join('|');
@@ -158,7 +183,7 @@ async function buildSingleFileBook(unit, stats, id) {
     id,
     kind: 'single',
     sourceDir: unit.dir,
-    title: cleanText(tags.common.album) || cleanText(tags.common.title) || titleFromFileName(unit.name),
+    title: pickBookTitle(tags.common, unit.name),
     author: cleanText(tags.common.albumartist) || cleanText(tags.common.artist) || 'Unknown author',
     narrator: cleanText(tags.common.composer?.[0]) || null,
     year: tags.common.year ?? null,
@@ -217,6 +242,61 @@ async function buildMultiTrackBook(unit, stats, id) {
   };
 }
 
+function median(values) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Some publishers ship one audiobook as a folder of short, numbered .m4b files
+ * (`001 - Title.m4b`, `002 - Title.m4b`, …), which groupIntoBooks would treat as
+ * dozens of separate books. Others put several full-length books directly in one
+ * series folder — those must stay separate even though they share the folder.
+ *
+ * We tell them apart by probing durations (a fast header-only read): when a
+ * folder's self-contained files are mostly short, they are parts of one book and
+ * get merged into a single multi-track unit ordered naturally by filename.
+ */
+async function consolidateSelfContainedParts(units) {
+  const byDir = new Map();
+  for (const unit of units) {
+    if (unit.kind !== 'single') continue;
+    if (!SELF_CONTAINED_EXT.has(path.extname(unit.files[0]).toLowerCase())) continue;
+    if (!byDir.has(unit.dir)) byDir.set(unit.dir, []);
+    byDir.get(unit.dir).push(unit);
+  }
+
+  const mergedFiles = new Set();
+  const newUnits = [];
+
+  for (const [dir, dirUnits] of byDir) {
+    if (dirUnits.length < 2) continue;
+
+    const durations = await mapLimit(dirUnits, TRACK_CONCURRENCY, async (u) => {
+      try {
+        return (await readMp4Info(u.files[0])).duration || 0;
+      } catch {
+        return 0;
+      }
+    });
+
+    const known = durations.filter((d) => d > 0);
+    // Without any duration signal, leave the folder as separate books.
+    if (!known.length || median(known) >= PART_MEDIAN_MAX_SEC) continue;
+
+    const files = dirUnits.map((u) => u.files[0]).sort(naturalCompare);
+    for (const file of files) mergedFiles.add(file);
+    newUnits.push({ kind: 'multi', dir, name: path.basename(dir), files });
+  }
+
+  if (!newUnits.length) return units;
+
+  const kept = units.filter((u) => !(u.kind === 'single' && mergedFiles.has(u.files[0])));
+  return [...kept, ...newUnits];
+}
+
 /**
  * Scan folders and return one entry per book.
  *
@@ -229,7 +309,7 @@ async function scanLibrary(folders, cachedBooks = [], onProgress) {
     for await (const file of walk(folder)) files.push(file);
   }
 
-  const units = groupIntoBooks(files);
+  const units = await consolidateSelfContainedParts(groupIntoBooks(files));
   const cacheById = new Map(cachedBooks.map((b) => [b.id, b]));
   let done = 0;
 
