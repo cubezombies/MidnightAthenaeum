@@ -78,6 +78,7 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#12121a',
     title: 'Tomelight',
+    icon: path.join(__dirname, '..', '..', 'build', 'icon.ico'),
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

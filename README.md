@@ -1,9 +1,18 @@
 # Tomelight
 
+![Tomelight](assets/logo.png)
+
 A desktop audiobook player for Windows, built with Electron. Plays local files with
 real chapter navigation, per-book resume, variable speed, and a sleep timer.
 
 The name is *tome* + *light* — reading old tomes by candlelight.
+
+## Icons
+
+The app icon is generated from `assets/logo.png` — the emblem is cropped out
+(dropping the wordmark) and written as `assets/icon.png` plus a multi-size
+`build/icon.ico` used for the window and taskbar. Regenerate with `npm run icons`
+(tweak the `CROP` constants in `scripts/make-icons.cjs` if the framing shifts).
 
 Planned features, differentiators, and performance work are tracked in
 [docs/ROADMAP.md](docs/ROADMAP.md).

@@ -5,11 +5,14 @@
   "description": "Tomelight — a desktop audiobook player with m4b chapter support and a sleep timer",
   "main": "src/main/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "icons": "node scripts/make-icons.cjs"
   },
   "license": "MIT",
   "devDependencies": {
-    "electron": "^34.0.0"
+    "electron": "^34.0.0",
+    "jimp": "^0.22.12",
+    "png-to-ico": "^3.0.2"
   },
   "dependencies": {
     "music-metadata": "^11.0.0"
