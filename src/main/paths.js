@@ -5,7 +5,7 @@ const path = require('node:path');
 // Everything this app writes must stay off C:. Electron would otherwise put
 // userData under %APPDATA% (C:), which also drags along Chromium's GPUCache,
 // Local Storage and blob storage.
-const DATA_ROOT = process.env.AUDIOBOOK_DATA_ROOT || 'D:\\Claude\\AudiobookPlayer';
+const DATA_ROOT = process.env.TOMELIGHT_DATA_ROOT || 'D:\\Claude\\Tomelight';
 
 module.exports = {
   DATA_ROOT,

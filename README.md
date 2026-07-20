@@ -1,7 +1,9 @@
-# Audiobook-player
+# Tomelight
 
 A desktop audiobook player for Windows, built with Electron. Plays local files with
 real chapter navigation, per-book resume, variable speed, and a sleep timer.
+
+The name is *tome* + *light* — reading old tomes by candlelight.
 
 Planned features, differentiators, and performance work are tracked in
 [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -54,10 +56,10 @@ instead of decoding the whole file. It also recovers chapters from files
 ## Where data lives
 
 Everything is kept off `C:`. Paths are set in `src/main/paths.js` and can be
-redirected with the `AUDIOBOOK_DATA_ROOT` environment variable.
+redirected with the `TOMELIGHT_DATA_ROOT` environment variable.
 
 ```
-D:\Claude\AudiobookPlayer\
+D:\Claude\Tomelight\
   userData\       Electron/Chromium profile and caches
   covers\         extracted cover art
   library.json    scanned library

@@ -1,7 +1,8 @@
 {
-  "name": "audiobook-player",
+  "name": "tomelight",
+  "productName": "Tomelight",
   "version": "0.1.0",
-  "description": "Desktop audiobook player with m4b chapter support",
+  "description": "Tomelight — a desktop audiobook player with m4b chapter support and a sleep timer",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron ."

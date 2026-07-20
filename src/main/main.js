@@ -1,9 +1,12 @@
 'use strict';
 
+const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 
-const { USER_DATA, LIBRARY_FILE, PROGRESS_FILE, DATA_ROOT } = require('./paths');
+const { USER_DATA, LIBRARY_FILE, PROGRESS_FILE, DATA_ROOT, COVER_CACHE } = require('./paths');
+
+app.setName('Tomelight');
 
 // Must happen before anything touches app paths, otherwise Chromium creates
 // its caches under %APPDATA% on C:.
@@ -74,7 +77,7 @@ function createWindow() {
     minWidth: 940,
     minHeight: 600,
     backgroundColor: '#12121a',
-    title: 'Audiobook Player',
+    title: 'Tomelight',
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -172,8 +175,29 @@ function registerIpc() {
   ipcMain.handle('app:revealDataFolder', () => shell.openPath(DATA_ROOT));
 }
 
+/**
+ * Extracted covers live in COVER_CACHE, but the library file stores their
+ * absolute paths. If the data root moves (e.g. a rename), those paths point at
+ * the old location and every cover 404s. Repoint any cover that sits in a
+ * `covers` folder other than the current cache, so a move self-heals.
+ */
+function normalizeCoverPaths(libraryState) {
+  let changed = 0;
+  for (const book of libraryState.books ?? []) {
+    if (!book.cover) continue;
+    const dir = path.dirname(book.cover);
+    if (path.basename(dir).toLowerCase() === 'covers' && dir !== COVER_CACHE) {
+      const moved = path.join(COVER_CACHE, path.basename(book.cover));
+      if (fs.existsSync(moved)) { book.cover = moved; changed += 1; }
+    }
+  }
+  if (changed) console.log(`[library] repointed ${changed} cover paths to ${COVER_CACHE}`);
+  return changed > 0;
+}
+
 app.whenReady().then(async () => {
   await Promise.all([libraryStore.load(), progressStore.load()]);
+  if (normalizeCoverPaths(libraryStore.get())) libraryStore.flush();
   registerMediaProtocol(getAllowedRoots);
   registerIpc();
   createWindow();
