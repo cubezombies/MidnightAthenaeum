@@ -3,6 +3,9 @@
 A desktop audiobook player for Windows, built with Electron. Plays local files with
 real chapter navigation, per-book resume, and variable speed.
 
+Planned features, differentiators, and performance work are tracked in
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
 ## Running it
 
 ```powershell
