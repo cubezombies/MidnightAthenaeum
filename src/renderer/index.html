@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' ab-media:; media-src 'self' ab-media:; style-src 'self'; script-src 'self';" />
+  <title>Audiobook Player</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <button id="backBtn" class="icon-btn hidden" title="Back to library" aria-label="Back to library">‹</button>
+      <h1 id="viewTitle">Library</h1>
+    </div>
+    <div class="topbar-actions">
+      <span id="scanStatus" class="scan-status" role="status" aria-live="polite"></span>
+      <input id="search" type="search" placeholder="Search title or author…" aria-label="Search library" />
+      <button id="rescanBtn" class="btn">Rescan</button>
+      <button id="addFolderBtn" class="btn btn-primary">Add folder</button>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Library grid -->
+    <section id="libraryView">
+      <div id="emptyState" class="empty hidden">
+        <h2>No audiobooks yet</h2>
+        <p>Add the folder where your audiobooks live. Files with embedded chapters (<code>.m4b</code>) get full chapter navigation.</p>
+        <button id="emptyAddBtn" class="btn btn-primary">Choose folder</button>
+      </div>
+      <div id="grid" class="grid"></div>
+    </section>
+
+    <!-- Single book -->
+    <section id="bookView" class="hidden">
+      <div class="book-header">
+        <img id="bookCover" class="book-cover" alt="" />
+        <div class="book-meta">
+          <h2 id="bookTitle"></h2>
+          <p id="bookAuthor" class="muted"></p>
+          <p id="bookSub" class="muted small"></p>
+          <p id="bookDesc" class="desc"></p>
+          <div class="book-actions">
+            <button id="resetProgressBtn" class="btn btn-quiet">Reset progress</button>
+          </div>
+        </div>
+      </div>
+      <h3 class="section-label">Chapters <span id="chapterCount" class="muted small"></span></h3>
+      <ol id="chapterList" class="chapters"></ol>
+    </section>
+  </main>
+
+  <!-- Player -->
+  <footer id="player" class="player hidden">
+    <div class="player-seek">
+      <span id="timeCurrent" class="time">0:00</span>
+      <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" />
+      <span id="timeTotal" class="time">0:00</span>
+    </div>
+    <div class="player-row">
+      <div class="now-playing">
+        <img id="miniCover" class="mini-cover" alt="" />
+        <div class="now-text">
+          <div id="nowTitle" class="now-title"></div>
+          <div id="nowChapter" class="now-chapter muted small"></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="prevChapterBtn" class="icon-btn" title="Previous chapter" aria-label="Previous chapter">⏮</button>
+        <button id="back30Btn" class="icon-btn" title="Back 30 seconds" aria-label="Back 30 seconds">↺30</button>
+        <button id="playBtn" class="play-btn" title="Play/Pause" aria-label="Play">▶</button>
+        <button id="fwd30Btn" class="icon-btn" title="Forward 30 seconds" aria-label="Forward 30 seconds">30↻</button>
+        <button id="nextChapterBtn" class="icon-btn" title="Next chapter" aria-label="Next chapter">⏭</button>
+      </div>
+
+      <div class="extras">
+        <label class="extra">
+          <span class="extra-label">Speed</span>
+          <select id="speed" aria-label="Playback speed">
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="1.75">1.75×</option>
+            <option value="2">2×</option>
+            <option value="2.5">2.5×</option>
+            <option value="3">3×</option>
+          </select>
+        </label>
+        <label class="extra">
+          <span class="extra-label">Volume</span>
+          <input id="volume" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume" />
+        </label>
+      </div>
+    </div>
+  </footer>
+
+  <audio id="audio" preload="metadata"></audio>
+  <script src="app.js"></script>
+</body>
+</html>

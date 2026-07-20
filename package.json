@@ -1,0 +1,19 @@
+{
+  "name": "audiobook-player",
+  "version": "0.1.0",
+  "description": "Desktop audiobook player with m4b chapter support",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^34.0.0"
+  },
+  "dependencies": {
+    "music-metadata": "^11.0.0"
+  },
+  "allowScripts": {
+    "electron@34.5.8": true
+  }
+}
