@@ -97,6 +97,21 @@ rather than by disabling `webSecurity`, so seeking inside a 40-hour file doesn't
 re-read from the start. The handler validates every request against the folders
 actually in your library, so it can't be used to read arbitrary files.
 
+## Known limitations
+
+- **Series-tagged titles.** Some publishers set every volume's `album` tag to the
+  series name. For single-file books the more specific `title` tag is used
+  instead, but a multi-track book (a folder of mp3s) has only the series name to
+  show, so volumes of the same series can render with an identical title even
+  though they are correctly kept as separate books. The folder names distinguish
+  them on disk.
+- **Box sets stay whole.** A single file (or folder) containing several novels is
+  one entry with one long chapter list; there is no reliable signal to split it
+  into constituent books.
+- **Merged m4b parts use one chapter per file.** When a book shipped as numbered
+  `.m4b` segments is merged, each segment becomes one chapter; any chapters
+  embedded inside a segment are not surfaced.
+
 ## Keyboard
 
 | Key | Action |
