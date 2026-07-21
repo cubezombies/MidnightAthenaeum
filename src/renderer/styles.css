@@ -242,6 +242,18 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
   border-radius: 6px; padding: 1px 7px; font-size: 12px; font-variant-numeric: tabular-nums;
 }
 
+/* "Added since you last opened the app" — top-right on a plain book card
+   (top-left is reserved for the series #N badge); top-left on a series tile
+   instead, since a tile's top-right is already the volume-count badge. */
+.new-badge {
+  position: absolute; top: 7px; right: 7px; z-index: 2;
+  background: var(--accent); color: #fff;
+  border-radius: 20px; padding: 2px 8px; font-size: 10px; font-weight: 700;
+  letter-spacing: .04em;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+}
+.new-badge-series { top: 7px; right: auto; left: 7px; }
+
 /* ---------- Library grid ---------- */
 .grid {
   display: grid;

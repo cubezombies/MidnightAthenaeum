@@ -37,6 +37,26 @@ const el = {
 
 const SKIP_AMOUNTS = new Set([10, 15, 30, 45, 60]);
 
+/**
+ * Threshold for the "NEW" badge: books added since the last time the app was
+ * opened, Spotify/Netflix-style. Read the timestamp from the *previous*
+ * session, then immediately overwrite it with "now" so this session's newly
+ * scanned books stay marked new for the whole session but age out next time
+ * (rather than the threshold sliding forward on every scan/render, which
+ * would make badges disappear as soon as they appeared).
+ *
+ * First-ever launch has no stored value; default to "now" so a brand new
+ * library doesn't show 6,000+ books as NEW.
+ */
+const LIBRARY_SEEN_AT_KEY = 'libraryLastOpenedAt';
+const LIBRARY_SEEN_AT = Number(localStorage.getItem(LIBRARY_SEEN_AT_KEY)) || Date.now();
+localStorage.setItem(LIBRARY_SEEN_AT_KEY, String(Date.now()));
+
+/** Distinct from bookStatus()'s 'new' (= not started listening) — this is "recently added to the library". */
+function isRecentlyAdded(book) {
+  return typeof book?.mtimeMs === 'number' && book.mtimeMs > LIBRARY_SEEN_AT;
+}
+
 const state = {
   books: [],
   progress: {},
@@ -264,6 +284,12 @@ function buildCard(book, { badge } = {}) {
     b.textContent = badge;
     art.append(b);
   }
+  if (isRecentlyAdded(book)) {
+    const n = document.createElement('div');
+    n.className = 'new-badge';
+    n.textContent = 'NEW';
+    art.append(n);
+  }
   if (pct > 0) {
     const bar = document.createElement('div');
     bar.className = 'card-bar';
@@ -461,6 +487,17 @@ function buildSeriesTile(group) {
   badge.className = 'series-badge';
   badge.textContent = `${group.volumes.length}`;
   art.append(badge);
+
+  // A NEW volume added to a series you already own is exactly the kind of
+  // library growth this badge exists for — without this, grouping series
+  // (which hides individual volumes behind the tile) would make the badge
+  // invisible for most of a library that uses that view.
+  if (group.volumes.some((v) => isRecentlyAdded(v.book))) {
+    const n = document.createElement('div');
+    n.className = 'new-badge new-badge-series';
+    n.textContent = 'NEW';
+    art.append(n);
+  }
 
   const title = document.createElement('div');
   title.className = 'card-title';

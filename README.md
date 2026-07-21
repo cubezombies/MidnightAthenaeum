@@ -216,6 +216,17 @@ collapsing into one meaningless pile. Books whose titles don't spell out a serie
 (standalones, un-numbered novellas) stay as normal cards. On the real test library
 this groups ~360 series covering ~1,500 books; the rest show individually.
 
+### "NEW" badge
+
+Books added since you last opened Tomelight get a small **NEW** pill on their
+cover, Spotify/Netflix-style — useful for a library that keeps growing. It
+clears the next time you open the app, not the moment you glance at it, so it
+doesn't disappear before you've actually had a chance to notice it. A brand new
+install doesn't retroactively badge your whole library. With **Group series**
+on, a series tile shows NEW too if any volume inside it is new — otherwise a
+newly added volume of a series you already own would be invisible behind the
+tile.
+
 ## Bookmarks
 
 Press `B` or the 🔖 button in the player to drop a bookmark at the current spot;

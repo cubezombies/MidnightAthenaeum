@@ -25,15 +25,29 @@ Already shipped, so it is not repeated in the lists below:
   volume fade, 30s rewind on resume, and a "+5 min" extend (Tier 1 #1, shipped).
 - **Bookmarks** — named marks with notes, jump-to, list view in the book detail,
   and a rolling "last stop" auto-bookmark on manual pause (Tier 1 #2, shipped).
-- **Continue-listening shelf + filters** — in-progress books surfaced at the top
-  of the library, most-recent first, plus All / In progress / Finished / Not
-  started tabs (Tier 1 #7–#8, shipped).
-- **Per-book speed + auto-rewind** — each book remembers its playback speed;
-  resuming rewinds a few seconds, scaled to how long you were paused
-  (Tier 1 #5–#6, shipped).
+- **Skip silence** — a Web Audio analyser detects sustained quiet gaps and
+  briefly boosts playbackRate through them (Tier 1 #3, shipped).
+- **Volume normalization** — measures each book's loudness on first play and
+  applies a gain toward a common target via a Web Audio graph, on by default
+  (Tier 1 #4, shipped).
+- **Continue-listening shelf + filters + sort** — in-progress books surfaced at
+  the top of the library, most-recent first; All / In progress / Finished / Not
+  started tabs; sort by author/title/added/played/duration (Tier 1 #5–#8,
+  shipped).
 - **Series grouping** — a toggle collapses a series' volumes into one tile with a
   drill-in series view; series name + index parsed from the title, author-guarded
   against franchise over-grouping; renderer-only, no re-scan (Tier 1 #7, shipped).
+- **Light theme** — follows the OS by default; a top-bar toggle overrides it,
+  applied before paint so there's no flash on launch (Tier 1 #9, shipped).
+- **Library folder management, safety & polish (Tier 1 #10–17, all shipped)** —
+  a Folders panel to view/remove library folders (plus drag-and-drop to add
+  one); an Undo toast on Reset Progress and bookmark delete instead of a
+  blocking confirm, since both are reversible; backup/restore of
+  progress+bookmarks+normalization to a sibling folder so deleting the data
+  folder can't take backups down with it; a customizable skip amount for the
+  ↺/↻ buttons; a manual "mark as finished/not finished" override; a chapter
+  list search box (validated against the real 212-chapter *Wind and Truth*);
+  and a "NEW" badge on books/series added since you last opened the app.
 
 Known gaps carried forward as motivation: series volumes can share a display
 title, box sets stay whole, and merged `.m4b` parts collapse to one chapter each.
@@ -229,11 +243,27 @@ automation can produce — confirmed instead by checking the known Electron
 regression here (electron/electron#44600) is macOS-specific and closed; this
 app targets Windows.
 
-### 17. "Recently added" indicator on cards — **S**
-Sort has a "Recently added" mode, but nothing marks *which* books are new at a
-glance while browsing normally — no small "NEW" badge or similar. Minor, but a
-common convention (Spotify/Netflix-style "new since you last opened" markers)
-that this library's constant-growth use case would benefit from.
+### 17. "Recently added" indicator on cards — **shipped** ✅
+A small accent "NEW" pill on a book's cover for anything added since the last
+time you opened Tomelight — top-right on a plain card, top-left on a series
+tile (opposite corners from the existing volume-# and count badges, so nothing
+collides). A series tile shows NEW if *any* volume inside it is new; without
+that, a newly added volume of a series you already own would be invisible
+behind the tile whenever Group Series is on — which would have undercut the
+whole point for exactly the constant-growth libraries this was aimed at.
+
+The threshold is "the last time the app was opened," read once at load and
+immediately overwritten with the current moment for next time — so badges from
+this session stay put for the whole session (they don't vanish the instant you
+glance at a card) and clear on the *next* launch, not this one. A first-ever
+install has no stored threshold and defaults to "now," so a fresh library
+doesn't badge all 6,000+ books as new.
+*Tested:* 13 checks — the first-launch default, a real book flipping from NEW
+to not-NEW as the threshold crosses its actual file mtime (and back), the
+series-tile aggregation, and confirmed live on screen (not just via computed
+style, which returns empty strings for a detached element) that the volume-#
+badge and the NEW badge render on opposite corners of the same card without
+overlapping.
 
 ---
 
