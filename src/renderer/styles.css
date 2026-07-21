@@ -113,6 +113,8 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 .filter-tab.active { background: var(--accent); color: #fff; }
 .filter-count { white-space: nowrap; }
 .toolbar-right { display: flex; align-items: center; gap: 14px; }
+.sort-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.sort-label select { padding: 5px 7px; font-size: 13px; }
 .group-toggle { padding: 6px 12px; font-size: 13px; }
 .group-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 

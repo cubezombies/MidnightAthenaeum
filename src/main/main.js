@@ -32,6 +32,18 @@ function getAllowedRoots() {
   return libraryStore.get().folders ?? [];
 }
 
+/** Newest file mtime for a book, pulled from its cache signature ("path:mtime:size|…"). */
+function bookMtime(book) {
+  if (!book.signature) return 0;
+  let max = 0;
+  for (const seg of book.signature.split('|')) {
+    const parts = seg.split(':'); // paths contain colons; mtime/size are the last two
+    const mtime = Number(parts[parts.length - 2]);
+    if (mtime > max) max = mtime;
+  }
+  return max;
+}
+
 /** Books carry absolute paths; the renderer only ever sees ab-media:// URLs. */
 function toClientBook(book) {
   let elapsed = 0;
@@ -58,6 +70,7 @@ function toClientBook(book) {
     chapters: book.chapters,
     tracks,
     coverUrl: book.cover ? mediaUrl(book.cover) : null,
+    mtimeMs: bookMtime(book),
     fileName: path.basename(book.tracks[0]?.filePath ?? ''),
     trackCount: book.tracks.length,
   };

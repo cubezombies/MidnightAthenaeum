@@ -7,7 +7,7 @@ const el = {
   grid: $('grid'), emptyState: $('emptyState'), search: $('search'),
   continueSection: $('continueSection'), continueRow: $('continueRow'),
   libraryToolbar: $('libraryToolbar'), filterTabs: $('filterTabs'), filterCount: $('filterCount'),
-  groupToggle: $('groupToggle'),
+  groupToggle: $('groupToggle'), sortSelect: $('sortSelect'),
   seriesView: $('seriesView'), seriesTitle: $('seriesTitle'), seriesSub: $('seriesSub'), seriesGrid: $('seriesGrid'),
   libraryView: $('libraryView'), bookView: $('bookView'),
   viewTitle: $('viewTitle'), backBtn: $('backBtn'), scanStatus: $('scanStatus'),
@@ -40,6 +40,7 @@ const state = {
   activeChapter: -1,
   seeking: false,
   filter: 'all',       // library filter: all | progress | finished | new
+  sort: localStorage.getItem('sort') || 'author',
   groupSeries: localStorage.getItem('groupSeries') === '1',
   viewingSeries: null, // the series group currently shown in the series view
   bookReturnsToSeries: null, // where the book view's back button should return
@@ -248,6 +249,28 @@ function matchesFilter(book) {
   }
 }
 
+const byAuthor = (a, b) => a.author.localeCompare(b.author) || a.title.localeCompare(b.title);
+
+/** Sort a copy of `books` by the current sort mode. */
+function sortBooks(books) {
+  const list = [...books];
+  switch (state.sort) {
+    case 'title':
+      return list.sort((a, b) => a.title.localeCompare(b.title));
+    case 'added':
+      return list.sort((a, b) => (b.mtimeMs || 0) - (a.mtimeMs || 0) || byAuthor(a, b));
+    case 'played':
+      return list.sort((a, b) =>
+        (state.progress[b.id]?.updatedAt ?? 0) - (state.progress[a.id]?.updatedAt ?? 0) || byAuthor(a, b));
+    case 'longest':
+      return list.sort((a, b) => (b.duration || 0) - (a.duration || 0));
+    case 'shortest':
+      return list.sort((a, b) => (a.duration || 0) - (b.duration || 0));
+    default: // author
+      return list.sort(byAuthor);
+  }
+}
+
 /** Render the whole library view: Continue-listening shelf, toolbar, grid. */
 function renderLibrary() {
   renderContinueShelf();
@@ -325,11 +348,12 @@ function buildSeriesTile(group) {
  */
 function renderGrid() {
   const query = el.search.value.trim().toLowerCase();
-  state.filtered = state.books.filter((b) => {
+  const matched = state.books.filter((b) => {
     if (!matchesFilter(b)) return false;
     if (!query) return true;
     return b.title.toLowerCase().includes(query) || b.author.toLowerCase().includes(query);
   });
+  state.filtered = sortBooks(matched);
 
   state.displayItems = state.groupSeries
     ? buildDisplayItems(state.filtered)
@@ -1054,6 +1078,13 @@ el.groupToggle.addEventListener('click', () => {
   renderGrid();
 });
 
+el.sortSelect.addEventListener('change', () => {
+  state.sort = el.sortSelect.value;
+  localStorage.setItem('sort', state.sort);
+  el.main.scrollTop = 0;
+  renderGrid();
+});
+
 el.filterTabs.addEventListener('click', (e) => {
   const tab = e.target.closest('.filter-tab');
   if (!tab) return;
@@ -1132,5 +1163,6 @@ window.api.onScanProgress(({ done, total, scanning }) => {
 });
 
 el.groupToggle.setAttribute('aria-pressed', String(state.groupSeries));
+el.sortSelect.value = state.sort;
 
 window.api.getState().then(applyState);
