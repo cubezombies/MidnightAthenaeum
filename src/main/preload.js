@@ -1,11 +1,15 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('library:getState'),
   addFolder: () => ipcRenderer.invoke('library:addFolder'),
+  addFolderPaths: (paths) => ipcRenderer.invoke('library:addFolderPaths', paths),
   removeFolder: (folder) => ipcRenderer.invoke('library:removeFolder', folder),
+  // File.path was removed from the renderer for security; this is the current
+  // replacement, needed to resolve a drag-and-dropped folder's real path.
+  getPathForFile: (file) => webUtils.getPathForFile(file),
   rescan: () => ipcRenderer.invoke('library:rescan'),
   saveProgress: (payload) => ipcRenderer.invoke('progress:save', payload),
   clearProgress: (bookId) => ipcRenderer.invoke('progress:clear', bookId),

@@ -358,6 +358,33 @@ async function runScan() {
   }
 }
 
+/**
+ * Merge candidate paths into the library's folder list and rescan. Filters to
+ * paths that are actually directories — the drag-and-drop path in particular
+ * can hand this individual files rather than a folder, and validating here
+ * (rather than trusting the renderer) matches how the rest of the app treats
+ * anything from the renderer as untrusted input.
+ *
+ * @returns the number of new directories actually added
+ */
+function addFoldersToLibrary(paths) {
+  const dirs = paths.filter((p) => {
+    try {
+      return fs.statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (!dirs.length) return 0;
+
+  const state = libraryStore.get();
+  const before = state.folders.length;
+  const folders = [...new Set([...state.folders, ...dirs])];
+  libraryStore.set({ ...state, folders });
+  if (folders.length > before) runScan();
+  return folders.length - before;
+}
+
 function registerIpc() {
   ipcMain.handle('library:getState', () => currentState());
 
@@ -367,12 +394,18 @@ function registerIpc() {
       properties: ['openDirectory'],
     });
     if (result.canceled || !result.filePaths.length) return currentState();
-
-    const state = libraryStore.get();
-    const folders = [...new Set([...state.folders, ...result.filePaths])];
-    libraryStore.set({ ...state, folders });
-    runScan();
+    addFoldersToLibrary(result.filePaths);
     return currentState();
+  });
+
+  // Drag-and-drop a folder onto the window. The renderer resolves each
+  // dropped item's real filesystem path via webUtils.getPathForFile in
+  // preload (File.path was removed from the renderer for security), so this
+  // just validates and adds them — no dialog needed, the drop already picked.
+  ipcMain.handle('library:addFolderPaths', (_event, paths) => {
+    const candidates = Array.isArray(paths) ? paths.filter((p) => typeof p === 'string' && p) : [];
+    const added = addFoldersToLibrary(candidates);
+    return { state: currentState(), attempted: candidates.length, added };
   });
 
   ipcMain.handle('library:removeFolder', (_event, folder) => {

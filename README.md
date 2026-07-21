@@ -38,6 +38,11 @@ with a live book count — and lets you remove one, which drops its books from
 Tomelight without touching anything on disk. Removing a folder that holds
 thousands of books asks for confirmation first, since there's no undo.
 
+You can also just **drag a folder onto the window** — it shows a drop-zone
+overlay while you're dragging and adds the folder the same way "Folders → Add
+folder" would. Dropping something that isn't a folder (e.g. an individual file)
+is rejected with a toast rather than silently doing nothing.
+
 ## How a library is interpreted
 
 Real libraries mix two conventions, so the scanner splits on file type:

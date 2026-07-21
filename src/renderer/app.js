@@ -20,6 +20,7 @@ const el = {
   resetProgressBtn: $('resetProgressBtn'),
   finishedToggleBtn: $('finishedToggleBtn'),
   toast: $('toast'), toastMsg: $('toastMsg'), toastUndo: $('toastUndo'),
+  dropOverlay: $('dropOverlay'),
   bookmarkBtn: $('bookmarkBtn'), bookmarkHereBtn: $('bookmarkHereBtn'),
   bookmarkList: $('bookmarkList'), bookmarkCount: $('bookmarkCount'),
   player: $('player'), audio: $('audio'), playBtn: $('playBtn'), seek: $('seek'),
@@ -183,6 +184,9 @@ function showToast(message, undoFn) {
   clearTimeout(toastTimer);
   toastUndoFn = undoFn;
   el.toastMsg.textContent = message;
+  // Info-only messages (no undoFn, e.g. "that wasn't a folder") skip the Undo
+  // button entirely rather than showing one that would do nothing.
+  el.toastUndo.classList.toggle('hidden', !undoFn);
   el.toast.classList.remove('hidden');
   toastTimer = setTimeout(hideToast, TOAST_MS);
 }
@@ -1576,6 +1580,56 @@ el.finishedToggleBtn.addEventListener('click', () => {
 
 el.bookmarkBtn.addEventListener('click', () => addBookmark());
 el.bookmarkHereBtn.addEventListener('click', () => addBookmark());
+
+/* ---------------- drag-and-drop a folder onto the window ---------------- */
+
+// dragenter/dragleave fire for every nested element the pointer crosses while
+// dragging, not just window boundaries -- a counter (rather than a boolean)
+// avoids the overlay flickering as the drag moves over child elements.
+let dragDepth = 0;
+const isFileDrag = (e) => e.dataTransfer?.types.includes('Files');
+
+window.addEventListener('dragenter', (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth += 1;
+  el.dropOverlay.classList.remove('hidden');
+});
+
+window.addEventListener('dragover', (e) => {
+  // Electron/Chromium's default action for an un-prevented drop is to
+  // navigate the window to the dropped file, which would break the app.
+  if (isFileDrag(e)) e.preventDefault();
+});
+
+window.addEventListener('dragleave', (e) => {
+  if (!isFileDrag(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) el.dropOverlay.classList.add('hidden');
+});
+
+window.addEventListener('drop', async (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  el.dropOverlay.classList.add('hidden');
+
+  // File.path was removed from the renderer for security; getPathForFile
+  // (exposed from preload via webUtils) is the current replacement. Dropped
+  // folders arrive here as File-like entries too, not just individual files.
+  const paths = [...e.dataTransfer.files]
+    .map((f) => window.api.getPathForFile(f))
+    .filter(Boolean);
+  if (!paths.length) return;
+
+  const result = await window.api.addFolderPaths(paths);
+  applyState(result.state);
+  if (!el.foldersMenu.classList.contains('hidden')) renderFoldersMenu();
+
+  if (result.added === 0) {
+    showToast("That doesn't look like a folder — drop a folder, not individual files.");
+  }
+});
 
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, select, textarea')) return;

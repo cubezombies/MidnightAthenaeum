@@ -203,10 +203,31 @@ query), the no-match state, clicking a filtered row still seeks to the right
 spot, the active-chapter highlight surviving a re-filter, and the search
 resetting when a different book is opened.
 
-### 16. Drag-and-drop to add a folder — **S**
-Dropping a folder onto the window is standard desktop-app behavior and currently
-unsupported (`Add folder` only opens the native picker). Small: a `dragover`/
-`drop` handler on the window that resolves to the same `library:addFolder` flow.
+### 16. Drag-and-drop to add a folder — **shipped** ✅
+Drop a folder on the window; a dashed-border overlay shows while dragging, and
+it's added the same way the Folders panel's own "Add folder" would be. Rejects
+non-folder drops (e.g. an individual file) with an info toast instead of
+silently doing nothing.
+
+Needed more than a bare `dragover`/`drop` handler: `File.path` was removed from
+the renderer in recent Electron for security, so the dropped item's real
+filesystem path has to come from `webUtils.getPathForFile()` — callable from
+preload (even under `sandbox: true`, where it's explicitly still exposed) and
+bridged to the renderer. `library:addFolder`'s "merge into the folder list and
+rescan" logic was factored into a shared `addFoldersToLibrary()` so a new
+`library:addFolderPaths` IPC could reuse it without the file-picker dialog,
+validating server-side that each dropped path is actually a directory rather
+than trusting the renderer.
+*What I could verify vs. couldn't:* the overlay's show/hide (including that
+nested dragenter/dragleave pairs from crossing child elements don't flicker it),
+and the full `addFolderPaths` → validate → add → rescan-once-if-new path against
+real directories on disk, including that re-dropping an already-added folder
+adds nothing and doesn't trigger a redundant rescan. What's *not* verified by
+an automated test: `webUtils.getPathForFile()` resolving a genuine OS drag's
+path correctly, since that requires real native drag data no CDP-based
+automation can produce — confirmed instead by checking the known Electron
+regression here (electron/electron#44600) is macOS-specific and closed; this
+app targets Windows.
 
 ### 17. "Recently added" indicator on cards — **S**
 Sort has a "Recently added" mode, but nothing marks *which* books are new at a
