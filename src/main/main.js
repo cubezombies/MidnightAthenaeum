@@ -158,13 +158,14 @@ function registerIpc() {
 
   ipcMain.handle('library:rescan', () => { runScan(); return currentState(); });
 
-  ipcMain.handle('progress:save', (_event, { bookId, position, duration }) => {
+  ipcMain.handle('progress:save', (_event, { bookId, position, duration, speed }) => {
     if (typeof bookId !== 'string' || typeof position !== 'number') return;
     const progress = { ...progressStore.get() };
     progress[bookId] = {
       position,
       duration: duration ?? progress[bookId]?.duration ?? 0,
       finished: duration ? position >= duration - 30 : false,
+      speed: speed ?? progress[bookId]?.speed ?? 1,
       updatedAt: Date.now(),
     };
     progressStore.set(progress);

@@ -91,6 +91,28 @@ body.playing #main { padding-bottom: calc(var(--player-h) + 22px); }
 .empty p { color: var(--muted); margin-bottom: 20px; }
 code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 
+/* ---------- Continue listening shelf ---------- */
+.continue-section { margin-bottom: 26px; }
+.continue-row {
+  display: flex; gap: 16px; overflow-x: auto; padding-bottom: 8px;
+  scrollbar-width: thin;
+}
+.continue-row .card { width: 150px; flex-shrink: 0; }
+
+/* ---------- Filter tabs ---------- */
+.library-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 18px; gap: 12px;
+}
+.filter-tabs { display: flex; gap: 4px; background: var(--bg-elev); padding: 4px; border-radius: 10px; }
+.filter-tab {
+  background: transparent; border: none; color: var(--muted);
+  padding: 6px 14px; border-radius: 7px; cursor: pointer; font-size: 13px;
+}
+.filter-tab:hover { color: var(--text); }
+.filter-tab.active { background: var(--accent); color: #fff; }
+.filter-count { white-space: nowrap; }
+
 /* ---------- Library grid ---------- */
 .grid {
   display: grid;

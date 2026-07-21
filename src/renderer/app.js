@@ -5,6 +5,8 @@ const $ = (id) => document.getElementById(id);
 const el = {
   main: $('main'),
   grid: $('grid'), emptyState: $('emptyState'), search: $('search'),
+  continueSection: $('continueSection'), continueRow: $('continueRow'),
+  libraryToolbar: $('libraryToolbar'), filterTabs: $('filterTabs'), filterCount: $('filterCount'),
   libraryView: $('libraryView'), bookView: $('bookView'),
   viewTitle: $('viewTitle'), backBtn: $('backBtn'), scanStatus: $('scanStatus'),
   addFolderBtn: $('addFolderBtn'), emptyAddBtn: $('emptyAddBtn'), rescanBtn: $('rescanBtn'),
@@ -35,6 +37,8 @@ const state = {
   pendingSeek: null,   // position to apply once the loading track reports metadata
   activeChapter: -1,
   seeking: false,
+  filter: 'all',       // library filter: all | progress | finished | new
+  pausedAt: 0,         // timestamp of the last pause, for resume auto-rewind
   filtered: [],        // books matching the current search
   gridShown: 0,        // how many cards are currently in the DOM
   userVolume: 1,       // volume the user set; audio volume = this * sleep fade
@@ -125,6 +129,48 @@ function buildCard(book) {
   return card;
 }
 
+/** Where a book sits in its lifecycle, from saved progress. */
+function bookStatus(bookId) {
+  const p = state.progress[bookId];
+  if (!p) return 'new';
+  if (p.finished) return 'finished';
+  if (p.position > 30) return 'progress';
+  return 'new';
+}
+
+function matchesFilter(book) {
+  switch (state.filter) {
+    case 'progress': return bookStatus(book.id) === 'progress';
+    case 'finished': return bookStatus(book.id) === 'finished';
+    case 'new': return bookStatus(book.id) === 'new';
+    default: return true;
+  }
+}
+
+/** Render the whole library view: Continue-listening shelf, toolbar, grid. */
+function renderLibrary() {
+  renderContinueShelf();
+  renderGrid();
+}
+
+/** Books you're partway through, most-recently-played first. */
+function renderContinueShelf() {
+  const query = el.search.value.trim().toLowerCase();
+  // The shelf is a shortcut to "what I'm on"; hide it while searching/filtering.
+  const show = !query && state.filter === 'all';
+
+  const inProgress = show
+    ? state.books
+        .filter((b) => bookStatus(b.id) === 'progress')
+        .sort((a, b) => (state.progress[b.id]?.updatedAt ?? 0) - (state.progress[a.id]?.updatedAt ?? 0))
+        .slice(0, 15)
+    : [];
+
+  el.continueSection.classList.toggle('hidden', inProgress.length === 0);
+  el.continueRow.replaceChildren();
+  for (const book of inProgress) el.continueRow.append(buildCard(book));
+}
+
 /**
  * A 10k-book library is far too many cards to put in the DOM at once (it costs
  * ~2 GB). Render in pages and append the next one when a sentinel near the
@@ -133,12 +179,16 @@ function buildCard(book) {
  */
 function renderGrid() {
   const query = el.search.value.trim().toLowerCase();
-  state.filtered = query
-    ? state.books.filter((b) =>
-        b.title.toLowerCase().includes(query) || b.author.toLowerCase().includes(query))
-    : state.books;
+  state.filtered = state.books.filter((b) => {
+    if (!matchesFilter(b)) return false;
+    if (!query) return true;
+    return b.title.toLowerCase().includes(query) || b.author.toLowerCase().includes(query);
+  });
 
   el.emptyState.classList.toggle('hidden', state.books.length > 0);
+  el.libraryToolbar.classList.toggle('hidden', state.books.length === 0);
+  el.filterCount.textContent = `${state.filtered.length.toLocaleString()} book${state.filtered.length === 1 ? '' : 's'}`;
+
   gridObserver?.disconnect();
   el.grid.replaceChildren();
   state.gridShown = 0;
@@ -176,7 +226,7 @@ function showLibrary() {
   el.bookView.classList.add('hidden');
   el.backBtn.classList.add('hidden');
   el.viewTitle.textContent = 'Library';
-  renderGrid();
+  renderLibrary();
 }
 
 function openBook(bookId) {
@@ -453,8 +503,32 @@ function loadIntoPlayer(book) {
   el.timeTotal.textContent = formatTime(book.duration);
 
   const saved = state.progress[book.id];
+  applySpeed(saved?.speed ?? 1);
+  state.pausedAt = 0; // don't auto-rewind on the first play of a freshly opened book
+
   const resumeAt = saved && !saved.finished ? saved.position : 0;
   seekTo(resumeAt, { autoplay: false });
+}
+
+/**
+ * Set the playback speed and remember it. `defaultPlaybackRate` is set too so it
+ * survives loading the next track of a multi-file book (loading resets
+ * playbackRate to the default).
+ */
+function applySpeed(rate) {
+  const r = Number(rate) || 1;
+  el.speed.value = String(r);
+  el.audio.defaultPlaybackRate = r;
+  el.audio.playbackRate = r;
+}
+
+/** How far to rewind on resume, based on how long playback was paused. */
+function resumeRewindSeconds(pausedMs) {
+  const minutes = pausedMs / 60000;
+  if (minutes < 0.5) return 0; // barely paused — don't move
+  if (minutes < 5) return 3;
+  if (minutes < 60) return 10;
+  return 20; // came back much later
 }
 
 /**
@@ -542,13 +616,16 @@ function flushProgress() {
   if (!Number.isFinite(position)) return;
 
   const duration = effectiveDuration(book);
+  const speed = Number(el.speed.value) || 1;
   state.progress[book.id] = {
+    ...state.progress[book.id],
     position,
     duration,
     finished: duration ? position >= duration - 30 : false,
+    speed,
     updatedAt: Date.now(),
   };
-  window.api.saveProgress({ bookId: book.id, position, duration });
+  window.api.saveProgress({ bookId: book.id, position, duration, speed });
 }
 
 /* ---------------- sleep timer ---------------- */
@@ -712,14 +789,26 @@ el.playBtn.addEventListener('click', () => {
 el.audio.addEventListener('play', () => {
   el.playBtn.textContent = '❚❚';
   el.playBtn.setAttribute('aria-label', 'Pause');
-  // Resuming after the sleep timer stopped us: rewind a little so you don't
-  // wake up having missed the last thing you heard.
+
   if (state.sleep.firedPaused) {
+    // Resuming after the sleep timer stopped us: rewind a fixed amount so you
+    // don't wake up having missed the last thing you heard.
     state.sleep.firedPaused = false;
     seekTo(globalTime() - SLEEP_REWIND_SEC);
+  } else if (state.pausedAt) {
+    // Rewind a little on resume, scaled to how long you were away.
+    const rewind = resumeRewindSeconds(Date.now() - state.pausedAt);
+    if (rewind > 0) seekTo(globalTime() - rewind);
   }
+  state.pausedAt = 0;
 });
-el.audio.addEventListener('pause', () => { el.playBtn.textContent = '▶'; el.playBtn.setAttribute('aria-label', 'Play'); flushProgress(); });
+
+el.audio.addEventListener('pause', () => {
+  el.playBtn.textContent = '▶';
+  el.playBtn.setAttribute('aria-label', 'Play');
+  state.pausedAt = Date.now();
+  flushProgress();
+});
 el.audio.addEventListener('timeupdate', updateTimeUI);
 
 // A track ending mid-book just means the next file starts; only the last one
@@ -732,7 +821,7 @@ el.audio.addEventListener('ended', () => {
     return;
   }
   flushProgress();
-  renderGrid();
+  renderLibrary();
 });
 el.audio.addEventListener('error', () => {
   const err = el.audio.error;
@@ -755,11 +844,22 @@ el.fwd30Btn.addEventListener('click', () => seekTo(globalTime() + 30));
 el.prevChapterBtn.addEventListener('click', () => jumpChapter(-1));
 el.nextChapterBtn.addEventListener('click', () => jumpChapter(1));
 
-el.speed.addEventListener('change', () => { el.audio.playbackRate = Number(el.speed.value); });
+el.speed.addEventListener('change', () => { applySpeed(Number(el.speed.value)); flushProgress(); });
 el.volume.addEventListener('input', () => { state.userVolume = Number(el.volume.value); applyVolume(); });
 
 el.backBtn.addEventListener('click', showLibrary);
-el.search.addEventListener('input', renderGrid);
+el.search.addEventListener('input', renderLibrary);
+
+el.filterTabs.addEventListener('click', (e) => {
+  const tab = e.target.closest('.filter-tab');
+  if (!tab) return;
+  state.filter = tab.dataset.filter;
+  for (const t of el.filterTabs.querySelectorAll('.filter-tab')) {
+    t.classList.toggle('active', t === tab);
+  }
+  el.main.scrollTop = 0;
+  renderLibrary();
+});
 
 el.addFolderBtn.addEventListener('click', () => window.api.addFolder().then(applyState));
 el.emptyAddBtn.addEventListener('click', () => window.api.addFolder().then(applyState));
@@ -769,7 +869,7 @@ el.resetProgressBtn.addEventListener('click', async () => {
   if (!state.current) return;
   state.progress = await window.api.clearProgress(state.current.id);
   if (state.playing?.id === state.current.id) seekTo(0, { autoplay: false });
-  renderGrid();
+  renderLibrary();
 });
 
 el.bookmarkBtn.addEventListener('click', () => addBookmark());
@@ -816,7 +916,7 @@ function applyState(next) {
       showLibrary();
     }
   }
-  renderGrid();
+  renderLibrary();
 }
 
 window.api.onLibraryChanged(applyState);

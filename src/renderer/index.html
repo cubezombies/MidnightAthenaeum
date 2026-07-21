@@ -29,6 +29,22 @@
         <p>Add the folder where your audiobooks live. Files with embedded chapters (<code>.m4b</code>) get full chapter navigation.</p>
         <button id="emptyAddBtn" class="btn btn-primary">Choose folder</button>
       </div>
+
+      <section id="continueSection" class="continue-section hidden">
+        <h3 class="section-label">Continue listening</h3>
+        <div id="continueRow" class="continue-row"></div>
+      </section>
+
+      <div id="libraryToolbar" class="library-toolbar hidden">
+        <div class="filter-tabs" id="filterTabs" role="tablist">
+          <button class="filter-tab active" data-filter="all" role="tab">All</button>
+          <button class="filter-tab" data-filter="progress" role="tab">In progress</button>
+          <button class="filter-tab" data-filter="finished" role="tab">Finished</button>
+          <button class="filter-tab" data-filter="new" role="tab">Not started</button>
+        </div>
+        <span id="filterCount" class="filter-count muted small"></span>
+      </div>
+
       <div id="grid" class="grid"></div>
     </section>
 

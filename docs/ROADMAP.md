@@ -25,6 +25,12 @@ Already shipped, so it is not repeated in the lists below:
   volume fade, 30s rewind on resume, and a "+5 min" extend (Tier 1 #1, shipped).
 - **Bookmarks** — named marks with notes, jump-to, list view in the book detail,
   and a rolling "last stop" auto-bookmark on manual pause (Tier 1 #2, shipped).
+- **Continue-listening shelf + filters** — in-progress books surfaced at the top
+  of the library, most-recent first, plus All / In progress / Finished / Not
+  started tabs (Tier 1 #7–#8, shipped).
+- **Per-book speed + auto-rewind** — each book remembers its playback speed;
+  resuming rewinds a few seconds, scaled to how long you were paused
+  (Tier 1 #5–#6, shipped).
 
 Known gaps carried forward as motivation: series volumes can share a display
 title, box sets stay whole, and merged `.m4b` parts collapse to one chapter each.
@@ -66,28 +72,26 @@ between books currently means grabbing the volume slider. Apply per-book gain
 from a one-time loudness scan (EBU R128 / ReplayGain-style), stored in the
 library entry, applied via a Web Audio `GainNode`.
 
-### 5. Per-book & persisted playback speed — **S**
-Speed currently lives only in the current session and applies globally. Save the
-last speed per book (some narrators demand 1.25×, others 1.75×) and restore it on
-open. Optional per-narrator default once narrator metadata is reliable.
+### 5. Per-book & persisted playback speed — **shipped** ✅
+Each book stores its last speed in `progress.json` and restores it on open
+(`defaultPlaybackRate` is set so it survives multi-track boundaries).
+*Possible next:* a per-narrator default once narrator metadata is reliable.
 
-### 6. Auto-rewind after pause — **S**
-Rewind a few seconds proportional to how long playback was paused (a little after
-a 1-minute pause, ~20s after overnight). Standard in serious audiobook apps;
-trivial to add in the `play`/`pause` handlers.
+### 6. Auto-rewind after pause — **shipped** ✅
+On resume, rewinds a few seconds scaled to how long you were paused (0 under 30s,
+3s, 10s, up to 20s after an hour+). Kept separate from the sleep timer's fixed
+30s resume-rewind.
 
-### 7. Library organization: sort, filter, series & collections — **M/L**
-Sort by author / title / recently added / recently played / duration; filter to
-In progress / Not started / Finished. **Series grouping** — collapse the 7
-Stormlight books or 17 Spellmonger books under one series tile you expand — which
-directly addresses the box-set and series-title limitations. Needs series/volume
-metadata (Tier 3, item 2) to be automatic; can be manual (drag to collection)
-before then.
+### 7. Library organization: sort, filter, series & collections — **partly shipped**
+Filter tabs (All / In progress / Finished / Not started) ship. **Still open:**
+sort options (author / title / recently added / duration) and **series grouping**
+— collapse the 7 Stormlight or 17 Spellmonger books under one expandable tile,
+which also addresses the box-set and series-title limitations. Series grouping
+wants the sidecar/online metadata from Tier 3 to be automatic.
 
-### 8. "Continue listening" shelf + finished state — **S/M**
-A row of in-progress books at the top, sorted by last played, is how people
-actually re-enter a library. `progress.json` already tracks `finished` and
-`updatedAt` — this is mostly a render change.
+### 8. "Continue listening" shelf + finished state — **shipped** ✅
+In-progress books surface in a row at the top of the library, most-recently-played
+first, hidden while searching or filtering. Finished state drives the filter tabs.
 
 ### 9. Light theme + theme toggle — **S**
 Currently dark-only. The CSS already uses variables, so a light palette behind a
