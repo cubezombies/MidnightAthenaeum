@@ -61,13 +61,20 @@ the same `JsonStore`. Still the foundation for clip export (Tier 2).
 *Possible next:* a bookmark count/indicator on library cards, and global
 cross-book bookmark search once the data layer moves to SQLite.
 
-### 3. Skip silence / "smart speed" — **M/L**
-Real-time detection of silent gaps and long pauses, shortening them without an
-audible cut. On a 40-hour book this reclaims hours. Two viable paths: the Web
-Audio API with an `AnalyserNode` gating playbackRate, or an offline pass that
-records silence spans per file for exact, glitch-free skipping.
-*Note:* pairs naturally with auto-chapter generation (Tier 3, item 3) since both
-rest on silence detection.
+### 3. Skip silence / "smart speed" — **shipped** ✅
+Real-time: the `<audio>` is routed through a Web Audio `AnalyserNode`, and a
+sustained quiet gap (RMS below ~0.01 for ≥0.2s) briefly boosts playbackRate
+(base × 3, capped at 4) so the gap passes fast, snapping back on speech. Toggle
+with the ⏩ button or `S`; stacks on per-book speed.
+*Two things that made it work:* the `ab-media://` responses needed
+`Access-Control-Allow-Origin` + `crossOrigin='anonymous'` or the analyser reads a
+tainted all-zero stream; and the detection loop must be a `setInterval`, not
+`requestAnimationFrame` — rAF is paused when the window is hidden, but a
+backgrounded audiobook still needs to skip silence (timers aren't throttled while
+audio plays).
+*Still possible:* an offline silence-span pass for exact glitch-free jumps, and a
+sensitivity/adaptive-threshold control; both pair with auto-chapter generation
+(Tier 3 #3).
 
 ### 4. Volume normalization / loudness leveling — **M**
 Libraries are ripped from many sources at wildly different levels; jumping

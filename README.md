@@ -3,9 +3,10 @@
 ![Tomelight](assets/logo.png)
 
 A desktop audiobook player for Windows, built with Electron. Plays local files with
-real chapter navigation, per-book resume, per-book playback speed, bookmarks, and a
-sleep timer. A **Continue listening** shelf, library filters, and **series grouping**
-keep the book you're on one click away, even in a library of thousands.
+real chapter navigation, per-book resume, per-book playback speed, bookmarks,
+skip-silence, and a sleep timer. A **Continue listening** shelf, library filters, and
+**series grouping** keep the book you're on one click away, even in a library of
+thousands.
 
 The name is *tome* + *light* — reading old tomes by candlelight.
 
@@ -144,6 +145,7 @@ actually in your library, so it can't be used to read arbitrary files.
 | `←` / `→` | Back / forward 30s |
 | `Shift` + `←` / `→` | Back / forward 5 min |
 | `B` | Add a bookmark at the current spot |
+| `S` | Toggle skip-silence |
 | `T` | Open the sleep-timer menu |
 | `Esc` | Close the sleep menu, or go back to the library |
 
@@ -178,6 +180,17 @@ view, where you can rename them, add a note, jump back with one click, or delete
 them. Every manual pause also drops a single rolling **"Last stop"** marker so you
 can always find where you set the book down — editing it makes it permanent.
 Bookmarks are stored in `bookmarks.json` in the data folder.
+
+## Skip silence
+
+The ⏩ button (or `S`) shortens the dead air in a book. The audio is routed
+through a Web Audio `AnalyserNode`; when it detects a *sustained* quiet gap
+(≈0.2s, so natural between-word pauses are left alone) it briefly raises the
+playback rate so the gap passes quickly, then snaps back to your speed the
+instant speech returns — no hard cut. It stacks on your per-book speed (capped so
+playback stays intelligible) and keeps working while the app is in the
+background. On a long book with lots of pauses this reclaims a meaningful chunk
+of time.
 
 ## Sleep timer
 

@@ -26,6 +26,7 @@ const el = {
   sleep: $('sleep') || document.querySelector('.sleep'),
   sleepBtn: $('sleepBtn'), sleepLabel: $('sleepLabel'), sleepMenu: $('sleepMenu'),
   sleepSnooze: document.querySelector('.sleep-extend'),
+  skipSilenceBtn: $('skipSilenceBtn'),
 };
 
 const state = {
@@ -41,6 +42,9 @@ const state = {
   seeking: false,
   filter: 'all',       // library filter: all | progress | finished | new
   sort: localStorage.getItem('sort') || 'author',
+  skipSilence: localStorage.getItem('skipSilence') === '1',
+  baseSpeed: 1,        // the user's chosen speed; skip-silence boosts above it
+  silenceBoosting: false,
   groupSeries: localStorage.getItem('groupSeries') === '1',
   viewingSeries: null, // the series group currently shown in the series view
   bookReturnsToSeries: null, // where the book view's back button should return
@@ -737,9 +741,96 @@ function loadIntoPlayer(book) {
  */
 function applySpeed(rate) {
   const r = Number(rate) || 1;
+  state.baseSpeed = r;
   el.speed.value = String(r);
   el.audio.defaultPlaybackRate = r;
-  el.audio.playbackRate = r;
+  // While skip-silence is actively boosting, leave the momentary rate alone;
+  // the controller restores it to baseSpeed when speech resumes.
+  if (!state.silenceBoosting) el.audio.playbackRate = r;
+}
+
+/* ---------------- skip silence ----------------
+ * Route the <audio> through a Web Audio AnalyserNode and, when it detects a
+ * sustained quiet gap, briefly raise playbackRate so the gap plays through fast
+ * instead of being heard — reclaiming the dead air in a book without a hard cut.
+ * The ab-media:// responses carry Access-Control-Allow-Origin and the element is
+ * crossOrigin='anonymous', so the analyser isn't tainted (would read zeros).
+ */
+const SILENCE_RMS = 0.01;     // below this = quiet (speech sits well above, ~0.03+)
+const SILENCE_ENTER_MS = 200; // sustained quiet before boosting (skip pauses, not word gaps)
+const SILENCE_BOOST = 3;      // multiply base speed while skipping
+const SILENCE_MAX_RATE = 4;   // keep playback intelligible
+
+let audioGraph = null;
+let audioGraphFailed = false;
+
+/** Build the analyser graph once (a media element can only be sourced once). */
+function ensureAudioGraph() {
+  if (audioGraph || audioGraphFailed) return audioGraph;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const source = ctx.createMediaElementSource(el.audio);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    analyser.connect(ctx.destination);
+    audioGraph = { ctx, analyser, buf: new Float32Array(analyser.fftSize) };
+  } catch (err) {
+    console.error('[skip-silence] audio graph init failed:', err);
+    audioGraphFailed = true;
+  }
+  return audioGraph;
+}
+
+function currentRms() {
+  audioGraph.analyser.getFloatTimeDomainData(audioGraph.buf);
+  let sum = 0;
+  for (const v of audioGraph.buf) sum += v * v;
+  return Math.sqrt(sum / audioGraph.buf.length);
+}
+
+function setSilenceBoost(on) {
+  if (on === state.silenceBoosting) return;
+  state.silenceBoosting = on;
+  el.audio.playbackRate = on
+    ? Math.min(state.baseSpeed * SILENCE_BOOST, SILENCE_MAX_RATE)
+    : state.baseSpeed;
+  el.skipSilenceBtn.classList.toggle('skipping', on);
+}
+
+let silenceSince = 0;
+// A short interval (not requestAnimationFrame): rAF is paused while the window
+// is hidden, but a background audiobook must keep skipping silence. Timers are
+// not throttled while the page is playing audio.
+function skipSilenceTick() {
+  if (!state.skipSilence || !audioGraph || el.audio.paused) {
+    if (state.silenceBoosting) setSilenceBoost(false);
+    silenceSince = 0;
+    return;
+  }
+  const now = performance.now();
+  const rms = currentRms();
+  if (rms < SILENCE_RMS) {
+    if (!silenceSince) silenceSince = now;
+    setSilenceBoost(now - silenceSince >= SILENCE_ENTER_MS);
+  } else {
+    silenceSince = 0;
+    setSilenceBoost(false); // snap back the instant speech returns
+  }
+}
+setInterval(skipSilenceTick, 25);
+
+/** Turn skip-silence on/off; builds and resumes the audio graph on demand. */
+function setSkipSilence(on) {
+  state.skipSilence = on;
+  localStorage.setItem('skipSilence', on ? '1' : '0');
+  el.skipSilenceBtn.setAttribute('aria-pressed', String(on));
+  if (on) {
+    const g = ensureAudioGraph();
+    if (g && g.ctx.state === 'suspended') g.ctx.resume();
+  } else {
+    setSilenceBoost(false);
+  }
 }
 
 /** How far to rewind on resume, based on how long playback was paused. */
@@ -1010,6 +1101,13 @@ el.audio.addEventListener('play', () => {
   el.playBtn.textContent = '❚❚';
   el.playBtn.setAttribute('aria-label', 'Pause');
 
+  // A Web Audio graph can only be built during/after a user gesture; first play
+  // is our chance. Resume it too — the context suspends when idle.
+  if (state.skipSilence) {
+    const g = ensureAudioGraph();
+    if (g && g.ctx.state === 'suspended') g.ctx.resume();
+  }
+
   if (state.sleep.firedPaused) {
     // Resuming after the sleep timer stopped us: rewind a fixed amount so you
     // don't wake up having missed the last thing you heard.
@@ -1085,6 +1183,8 @@ el.sortSelect.addEventListener('change', () => {
   renderGrid();
 });
 
+el.skipSilenceBtn.addEventListener('click', () => setSkipSilence(!state.skipSilence));
+
 el.filterTabs.addEventListener('click', (e) => {
   const tab = e.target.closest('.filter-tab');
   if (!tab) return;
@@ -1118,6 +1218,9 @@ document.addEventListener('keydown', (e) => {
     case 'ArrowRight': seekTo(globalTime() + (e.shiftKey ? 300 : 30)); break;
     case 'b': case 'B':
       if (state.playing || state.current) addBookmark();
+      break;
+    case 's': case 'S':
+      if (!el.player.classList.contains('hidden')) setSkipSilence(!state.skipSilence);
       break;
     case 't': case 'T':
       if (!el.player.classList.contains('hidden')) {
@@ -1164,5 +1267,11 @@ window.api.onScanProgress(({ done, total, scanning }) => {
 
 el.groupToggle.setAttribute('aria-pressed', String(state.groupSeries));
 el.sortSelect.value = state.sort;
+
+// Needed before the first src assignment so the Web Audio analyser (skip
+// silence) can read the ab-media:// stream instead of a tainted, all-zero one.
+el.audio.crossOrigin = 'anonymous';
+el.audio.preservesPitch = true;
+el.skipSilenceBtn.setAttribute('aria-pressed', String(state.skipSilence));
 
 window.api.getState().then(applyState);

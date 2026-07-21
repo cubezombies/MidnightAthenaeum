@@ -266,6 +266,14 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 
 .no-bookmarks { color: var(--muted); padding: 8px 12px 4px; font-size: 13px; }
 
+/* ---------- Skip-silence toggle ---------- */
+.skipsil-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+.skipsil-btn.skipping { animation: skipsil-pulse .8s ease-in-out infinite; }
+@keyframes skipsil-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+
 .bookmark-btn.flash { animation: bm-flash .5s ease; }
 @keyframes bm-flash {
   0% { transform: scale(1); }

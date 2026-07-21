@@ -113,6 +113,9 @@ function registerMediaProtocol(getAllowedRoots) {
             'Content-Length': String(end - start + 1),
             'Content-Range': `bytes ${start}-${end}/${stat.size}`,
             'Accept-Ranges': 'bytes',
+            // Untaint the media so the renderer's Web Audio AnalyserNode (used by
+            // skip-silence) can read the waveform of an ab-media:// source.
+            'Access-Control-Allow-Origin': '*',
           },
         });
       }
@@ -124,6 +127,7 @@ function registerMediaProtocol(getAllowedRoots) {
         'Content-Type': contentType,
         'Content-Length': String(stat.size),
         'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
       },
     });
   });
