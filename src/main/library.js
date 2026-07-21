@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const { COVER_CACHE } = require('./paths');
 const { readMp4Info } = require('./mp4-chapters');
+const { chaptersFromCue, hasSiblingCue } = require('./cue');
 const { groupIntoBooks, naturalCompare } = require('./group');
 
 const AUDIO_EXTENSIONS = new Set(['.m4b', '.m4a', '.mp3', '.aac', '.ogg', '.opus', '.flac', '.wav']);
@@ -169,12 +170,18 @@ async function buildSingleFileBook(unit, stats, id) {
   ]);
 
   const duration = tags.format.duration || mp4.duration || 0;
-  const chapters = mp4.chapters.map((ch, i, all) => ({
+  let chapters = mp4.chapters.map((ch, i, all) => ({
     index: i,
     title: ch.title,
     start: ch.start,
     end: all[i + 1] ? all[i + 1].start : duration || null,
   }));
+
+  // Fall back to a sibling .cue when the file has no embedded chapters.
+  if (chapters.length <= 1 && hasSiblingCue(filePath)) {
+    const cueChapters = await chaptersFromCue(filePath, duration);
+    if (cueChapters.length > 1) chapters = cueChapters;
+  }
 
   let cover = await cacheCoverFromPicture(id, tags.common.picture?.[0]);
   if (!cover) cover = await findFolderImage(unit.dir);
@@ -220,6 +227,14 @@ async function buildMultiTrackBook(unit, stats, id) {
     elapsed += duration;
   }
 
+  let chapterList = chapters;
+  // A lone audio file (e.g. one big .mp3) is just one "chapter"; if it ships a
+  // sibling .cue, use that to give it real chapters.
+  if (tracks.length === 1 && hasSiblingCue(tracks[0].filePath)) {
+    const cueChapters = await chaptersFromCue(tracks[0].filePath, elapsed);
+    if (cueChapters.length > 1) chapterList = cueChapters;
+  }
+
   let cover = await cacheCoverFromPicture(id, first?.tags.common.picture?.[0]);
   if (!cover) cover = await findFolderImage(unit.dir);
 
@@ -236,7 +251,7 @@ async function buildMultiTrackBook(unit, stats, id) {
     description: cleanText(first?.tags.common.comment?.[0]?.text) || null,
     duration: elapsed,
     cover,
-    chapters,
+    chapters: chapterList,
     tracks,
     signature: unitSignature(stats),
   };

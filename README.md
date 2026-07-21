@@ -64,6 +64,13 @@ which is both more robust and roughly 50× faster, since it does targeted reads
 instead of decoding the whole file. It also recovers chapters from files
 `music-metadata` refuses to parse at all.
 
+**`.cue` fallback.** When a single-file book has no embedded chapters (a lone
+`.mp3`, or an `.m4b` that omits them) but ships a sibling `.cue` sheet, the
+chapter titles and offsets are read from that instead (`src/main/cue.js`). This
+is a *fallback only* — real embedded chapters are never overridden. On the test
+library it gave real chapters to ~47 otherwise-unnavigable books (some 80–180
+chapters long).
+
 ## Where data lives
 
 Everything is kept off `C:`. Paths are set in `src/main/paths.js` and can be

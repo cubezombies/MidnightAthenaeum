@@ -162,11 +162,14 @@ plus a "Voice Boost" toggle. Genuinely useful for fast listeners.
 
 Concrete because the numbers come from the actual `E:\Books` scan.
 
-### 1. `.cue` sheet chapter markers — **M**
-The library contains **656 `.cue` files**. These commonly hold chapter/track
-markers for single-file or few-file mp3 rips that currently show one flat chapter
-per file. Parse the sibling `.cue` to recover real chapter titles and offsets —
-a direct, high-value chapter-quality win for a big slice of the mp3 collection.
+### 1. `.cue` sheet chapter markers — **shipped** ✅
+Parses a sibling `.cue` (`src/main/cue.js`) as a **fallback** when a single-file
+book has no embedded chapters, recovering titles + offsets (INDEX `MM:SS:FF`).
+Real embedded chapters are never overridden. Turned out narrower than hoped —
+most of the 656 `.cue` files pair with `.m4b` that already carry chapters — so it
+helped ~47 books, but those were genuinely unnavigable single `.mp3`s (some
+80–180 chapters). Applied to the existing library via a one-off backfill; future
+scans do it inline.
 
 ### 2. Sidecar metadata: `.nfo`, `.opf`, `metadata.json` — **M** (investigated)
 Coverage on the real library is thinner than hoped and does **not** meaningfully
