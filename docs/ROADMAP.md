@@ -160,11 +160,15 @@ section, and an unrelated JSON file) rather than the real data folder, since the
 native save/open dialogs this feature triggers can't be driven through the
 CDP-based testing used elsewhere in this project.
 
-### 13. Customizable skip amounts — **S**
-The back/forward skip is fixed at 30s (and 5 min with Shift). Real-world
-audiobook apps commonly let users set this per their preference (10/15/30/45/60s)
-— confirmed as a live user ask in current app reviews, not just a guess. Small:
-a settings field plus reading the value into the existing `seekTo` calls.
+### 13. Customizable skip amounts — **shipped** ✅
+A **Skip** dropdown next to Speed (10/15/30/45/60s, 30 default) drives the ↺/↻
+buttons and the plain arrow-key shortcuts; the buttons' own labels update to
+match so they never show a stale amount. Persisted, with a safe fallback to 30
+if the stored value is ever invalid. `Shift`+arrow's 5-minute jump is a
+deliberately separate, fixed "big skip" — not part of this setting.
+*Tested:* 18 checks including that a reload picks the persisted value back up
+immediately (no stale button label before the first click) and that a corrupted
+localStorage value falls back safely rather than breaking the buttons.
 
 ### 14. Manual "mark as finished / not finished" — **S**
 Finished status is purely automatic (`position >= duration - 30`) — there's no

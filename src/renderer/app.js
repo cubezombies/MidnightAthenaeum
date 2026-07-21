@@ -23,7 +23,7 @@ const el = {
   player: $('player'), audio: $('audio'), playBtn: $('playBtn'), seek: $('seek'),
   timeCurrent: $('timeCurrent'), timeTotal: $('timeTotal'),
   prevChapterBtn: $('prevChapterBtn'), nextChapterBtn: $('nextChapterBtn'),
-  back30Btn: $('back30Btn'), fwd30Btn: $('fwd30Btn'),
+  back30Btn: $('back30Btn'), fwd30Btn: $('fwd30Btn'), skipAmountSelect: $('skipAmount'),
   speed: $('speed'), volume: $('volume'),
   miniCover: $('miniCover'), nowTitle: $('nowTitle'), nowChapter: $('nowChapter'),
   sleep: $('sleep') || document.querySelector('.sleep'),
@@ -31,6 +31,8 @@ const el = {
   sleepSnooze: document.querySelector('.sleep-extend'),
   skipSilenceBtn: $('skipSilenceBtn'), normalizeBtn: $('normalizeBtn'),
 };
+
+const SKIP_AMOUNTS = new Set([10, 15, 30, 45, 60]);
 
 const state = {
   books: [],
@@ -46,6 +48,8 @@ const state = {
   seeking: false,
   filter: 'all',       // library filter: all | progress | finished | new
   sort: localStorage.getItem('sort') || 'author',
+  skipAmount: SKIP_AMOUNTS.has(Number(localStorage.getItem('skipAmount')))
+    ? Number(localStorage.getItem('skipAmount')) : 30,
   skipSilence: localStorage.getItem('skipSilence') === '1',
   baseSpeed: 1,        // the user's chosen speed; skip-silence boosts above it
   silenceBoosting: false,
@@ -875,6 +879,25 @@ function applySpeed(rate) {
   if (!state.silenceBoosting) el.audio.playbackRate = r;
 }
 
+/**
+ * Set the back/forward skip amount (seconds) used by the ↺/↻ buttons and the
+ * plain arrow-key shortcuts, and update the buttons' labels to match — so a
+ * 15s setting actually shows "↺15", not a stale "↺30". Persisted; Shift+arrow's
+ * 5-minute jump is a separate, fixed "big skip" and isn't affected.
+ */
+function applySkipAmount(seconds) {
+  const s = SKIP_AMOUNTS.has(Number(seconds)) ? Number(seconds) : 30;
+  state.skipAmount = s;
+  localStorage.setItem('skipAmount', String(s));
+  el.skipAmountSelect.value = String(s);
+  el.back30Btn.textContent = `↺${s}`;
+  el.back30Btn.title = `Back ${s} seconds`;
+  el.back30Btn.setAttribute('aria-label', `Back ${s} seconds`);
+  el.fwd30Btn.textContent = `${s}↻`;
+  el.fwd30Btn.title = `Forward ${s} seconds`;
+  el.fwd30Btn.setAttribute('aria-label', `Forward ${s} seconds`);
+}
+
 /* ---------------- skip silence ----------------
  * Route the <audio> through a Web Audio AnalyserNode and, when it detects a
  * sustained quiet gap, briefly raise playbackRate so the gap plays through fast
@@ -1388,8 +1411,9 @@ el.seek.addEventListener('change', () => {
   if (total > 0) { seekTo((Number(el.seek.value) / 1000) * total); flushProgress(); }
 });
 
-el.back30Btn.addEventListener('click', () => seekTo(globalTime() - 30));
-el.fwd30Btn.addEventListener('click', () => seekTo(globalTime() + 30));
+el.back30Btn.addEventListener('click', () => seekTo(globalTime() - state.skipAmount));
+el.fwd30Btn.addEventListener('click', () => seekTo(globalTime() + state.skipAmount));
+el.skipAmountSelect.addEventListener('change', () => applySkipAmount(el.skipAmountSelect.value));
 el.prevChapterBtn.addEventListener('click', () => jumpChapter(-1));
 el.nextChapterBtn.addEventListener('click', () => jumpChapter(1));
 
@@ -1468,8 +1492,8 @@ document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, select, textarea')) return;
   switch (e.key) {
     case ' ':        e.preventDefault(); el.playBtn.click(); break;
-    case 'ArrowLeft':  seekTo(globalTime() - (e.shiftKey ? 300 : 30)); break;
-    case 'ArrowRight': seekTo(globalTime() + (e.shiftKey ? 300 : 30)); break;
+    case 'ArrowLeft':  seekTo(globalTime() - (e.shiftKey ? 300 : state.skipAmount)); break;
+    case 'ArrowRight': seekTo(globalTime() + (e.shiftKey ? 300 : state.skipAmount)); break;
     case 'b': case 'B':
       if (state.playing || state.current) addBookmark();
       break;
@@ -1528,6 +1552,7 @@ window.api.onScanProgress(({ done, total, scanning }) => {
 
 el.groupToggle.setAttribute('aria-pressed', String(state.groupSeries));
 el.sortSelect.value = state.sort;
+applySkipAmount(state.skipAmount);
 
 /* ---------------- theme ---------------- */
 

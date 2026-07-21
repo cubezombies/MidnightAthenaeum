@@ -161,7 +161,7 @@ actually in your library, so it can't be used to read arbitrary files.
 | Key | Action |
 | --- | --- |
 | `Space` | Play / pause |
-| `←` / `→` | Back / forward 30s |
+| `←` / `→` | Back / forward (skip amount, default 30s — set via the **Skip** dropdown) |
 | `Shift` + `←` / `→` | Back / forward 5 min |
 | `B` | Add a bookmark at the current spot |
 | `S` | Toggle skip-silence |
@@ -176,6 +176,11 @@ through, most-recently-played first, one click from resuming. Filter tabs (All /
 In progress / Finished / Not started) narrow the grid below. Each book remembers
 its own **playback speed**, and resuming after a pause **rewinds a few seconds**
 (more the longer you were away) so you don't lose the thread.
+
+The **Skip** dropdown in the player sets how far the ↺/↻ buttons and the plain
+`←`/`→` keys jump — 10/15/30/45/60s, 30 by default. The buttons' labels update to
+match, and it's remembered across restarts. `Shift`+`←`/`→` is a separate, fixed
+5-minute jump either way.
 
 ### Series grouping
 
