@@ -76,11 +76,17 @@ audio plays).
 sensitivity/adaptive-threshold control; both pair with auto-chapter generation
 (Tier 3 #3).
 
-### 4. Volume normalization / loudness leveling — **M**
-Libraries are ripped from many sources at wildly different levels; jumping
-between books currently means grabbing the volume slider. Apply per-book gain
-from a one-time loudness scan (EBU R128 / ReplayGain-style), stored in the
-library entry, applied via a Web Audio `GainNode`.
+### 4. Volume normalization / loudness leveling — **shipped** ✅
+Each book's gated RMS loudness is measured over ~30s on first play (the real
+library spans ~7 dB), a gain toward a common target (−19 dBFS) is computed —
+clamped ±12 dB and peak-limited so a boost can't clip — stored in
+`normalization.json`, and applied instantly thereafter via a Web Audio gain node.
+On by default; ⚖ / `N` toggles.
+*Refactor it drove:* volume moved off `el.audio.volume` into a graph gain node
+(`source → analyser → normGain → volumeGain → out`) so the analyser always sees
+full-scale audio — which also made skip-silence volume-independent.
+*Still possible:* true EBU R128 (K-weighting/gating) instead of gated RMS, and an
+offline scan at import so the very first play is normalized too.
 
 ### 5. Per-book & persisted playback speed — **shipped** ✅
 Each book stores its last speed in `progress.json` and restores it on open

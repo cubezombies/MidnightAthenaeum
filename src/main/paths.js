@@ -14,4 +14,5 @@ module.exports = {
   LIBRARY_FILE: path.join(DATA_ROOT, 'library.json'),
   PROGRESS_FILE: path.join(DATA_ROOT, 'progress.json'),
   BOOKMARKS_FILE: path.join(DATA_ROOT, 'bookmarks.json'),
+  NORMALIZATION_FILE: path.join(DATA_ROOT, 'normalization.json'),
 };

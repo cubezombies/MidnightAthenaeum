@@ -4,7 +4,7 @@
 
 A desktop audiobook player for Windows, built with Electron. Plays local files with
 real chapter navigation, per-book resume, per-book playback speed, bookmarks,
-skip-silence, and a sleep timer. A **Continue listening** shelf, library filters, and
+skip-silence, volume normalization, and a sleep timer. A **Continue listening** shelf, library filters, and
 **series grouping** keep the book you're on one click away, even in a library of
 thousands.
 
@@ -146,6 +146,7 @@ actually in your library, so it can't be used to read arbitrary files.
 | `Shift` + `←` / `→` | Back / forward 5 min |
 | `B` | Add a bookmark at the current spot |
 | `S` | Toggle skip-silence |
+| `N` | Toggle volume normalization |
 | `T` | Open the sleep-timer menu |
 | `Esc` | Close the sleep menu, or go back to the library |
 
@@ -191,6 +192,22 @@ instant speech returns — no hard cut. It stacks on your per-book speed (capped
 playback stays intelligible) and keeps working while the app is in the
 background. On a long book with lots of pauses this reclaims a meaningful chunk
 of time.
+
+## Volume normalization
+
+Books ripped from different sources sit at wildly different levels (~7 dB spread
+across the test library), so switching books used to mean reaching for the volume
+slider. The ⚖ button (on by default; `N` toggles) evens this out: the first time a
+book plays, its gated loudness is measured over ~30 seconds and a gain is computed
+to bring it to a common level, stored in `normalization.json` and applied
+instantly on every later play. The gain is clamped and peak-limited so boosting a
+quiet book never clips.
+
+The audio runs through a small Web Audio graph
+(`source → analyser → normalize gain → volume gain → output`). Putting the
+analyser first means loudness is measured at full scale regardless of your volume
+setting; putting volume in the graph (rather than on the element) means the
+measurement — and skip-silence — are unaffected by where you set the slider.
 
 ## Sleep timer
 

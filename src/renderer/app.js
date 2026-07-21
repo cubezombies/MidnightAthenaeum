@@ -26,7 +26,7 @@ const el = {
   sleep: $('sleep') || document.querySelector('.sleep'),
   sleepBtn: $('sleepBtn'), sleepLabel: $('sleepLabel'), sleepMenu: $('sleepMenu'),
   sleepSnooze: document.querySelector('.sleep-extend'),
-  skipSilenceBtn: $('skipSilenceBtn'),
+  skipSilenceBtn: $('skipSilenceBtn'), normalizeBtn: $('normalizeBtn'),
 };
 
 const state = {
@@ -45,6 +45,9 @@ const state = {
   skipSilence: localStorage.getItem('skipSilence') === '1',
   baseSpeed: 1,        // the user's chosen speed; skip-silence boosts above it
   silenceBoosting: false,
+  normalize: localStorage.getItem('normalize') !== '0', // on by default
+  normalization: {},   // { [bookId]: measured gain }
+  norm: null,          // in-progress loudness measurement for the current book
   groupSeries: localStorage.getItem('groupSeries') === '1',
   viewingSeries: null, // the series group currently shown in the series view
   bookReturnsToSeries: null, // where the book view's back button should return
@@ -729,6 +732,7 @@ function loadIntoPlayer(book) {
   const saved = state.progress[book.id];
   applySpeed(saved?.speed ?? 1);
   state.pausedAt = 0; // don't auto-rewind on the first play of a freshly opened book
+  startNormalization(book);
 
   const resumeAt = saved && !saved.finished ? saved.position : 0;
   seekTo(resumeAt, { autoplay: false });
@@ -761,10 +765,24 @@ const SILENCE_ENTER_MS = 200; // sustained quiet before boosting (skip pauses, n
 const SILENCE_BOOST = 3;      // multiply base speed while skipping
 const SILENCE_MAX_RATE = 4;   // keep playback intelligible
 
+// Volume normalization. Measure each book's gated loudness and apply a gain so
+// books sit at a common level (measured ~7 dB spread across the real library).
+const NORM_TARGET_DBFS = -19;  // roughly the library median gated RMS
+const NORM_GATE_RMS = 0.02;    // ignore pauses when measuring loudness
+const NORM_WARMUP = 200;       // gated samples before a first running estimate (~5s)
+const NORM_UPDATE_EVERY = 120; // re-estimate cadence while converging (~3s)
+const NORM_LOCK_SAMPLES = 1200; // gated samples to finalise + store (~30s of speech)
+
 let audioGraph = null;
 let audioGraphFailed = false;
 
-/** Build the analyser graph once (a media element can only be sourced once). */
+/**
+ * Build the audio graph once (a media element can only be sourced once):
+ *   source -> analyser -> normGain -> destination
+ * The analyser taps before the gain so loudness is measured raw; the user's
+ * volume is applied on el.audio (before the source tap) and compensated for when
+ * reading levels, so both skip-silence and normalization are volume-independent.
+ */
 function ensureAudioGraph() {
   if (audioGraph || audioGraphFailed) return audioGraph;
   try {
@@ -772,21 +790,33 @@ function ensureAudioGraph() {
     const source = ctx.createMediaElementSource(el.audio);
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 1024;
+    const normGain = ctx.createGain();
+    const volumeGain = ctx.createGain();
     source.connect(analyser);
-    analyser.connect(ctx.destination);
-    audioGraph = { ctx, analyser, buf: new Float32Array(analyser.fftSize) };
+    analyser.connect(normGain);
+    normGain.connect(volumeGain);
+    volumeGain.connect(ctx.destination);
+    audioGraph = { ctx, analyser, normGain, volumeGain, buf: new Float32Array(analyser.fftSize) };
+    // Volume now lives in the graph (after the analyser), so the analyser always
+    // sees the raw full-scale signal — measurement and silence detection are
+    // volume-independent. The element's own volume is pinned to 1.
+    volumeGain.gain.value = Math.max(0, Math.min(1, state.userVolume * state.sleep.fadeGain));
+    el.audio.volume = 1;
   } catch (err) {
-    console.error('[skip-silence] audio graph init failed:', err);
+    console.error('[audio] graph init failed:', err);
     audioGraphFailed = true;
   }
   return audioGraph;
 }
 
-function currentRms() {
-  audioGraph.analyser.getFloatTimeDomainData(audioGraph.buf);
+/** Raw source-level RMS and peak (the analyser taps before any gain). */
+function currentLevel() {
+  const buf = audioGraph.buf;
+  audioGraph.analyser.getFloatTimeDomainData(buf);
   let sum = 0;
-  for (const v of audioGraph.buf) sum += v * v;
-  return Math.sqrt(sum / audioGraph.buf.length);
+  let peak = 0;
+  for (const v of buf) { sum += v * v; const a = Math.abs(v); if (a > peak) peak = a; }
+  return { rms: Math.sqrt(sum / buf.length), peak };
 }
 
 function setSilenceBoost(on) {
@@ -798,27 +828,84 @@ function setSilenceBoost(on) {
   el.skipSilenceBtn.classList.toggle('skipping', on);
 }
 
+/** Smoothly move the normalization gain to `gain` over `ramp` seconds. */
+function setNormGain(gain, ramp = 0.4) {
+  if (!audioGraph) return;
+  const p = audioGraph.normGain.gain;
+  const t = audioGraph.ctx.currentTime;
+  p.cancelScheduledValues(t);
+  p.setValueAtTime(p.value, t);
+  p.linearRampToValueAtTime(gain, t + ramp);
+}
+
+function computeNormGain(m) {
+  const rms = Math.sqrt(m.sumMS / m.count);
+  const dbfs = 20 * Math.log10(rms || 1e-9);
+  const gainDb = Math.max(-12, Math.min(12, NORM_TARGET_DBFS - dbfs));
+  let gain = 10 ** (gainDb / 20);
+  const clipLimit = m.peak > 0.01 ? 0.98 / m.peak : 4; // never push peaks into clipping
+  return Math.max(0.25, Math.min(4, Math.min(gain, clipLimit)));
+}
+
+/** Prepare normalization for a freshly loaded book: apply a stored gain, or measure. */
+function startNormalization(book) {
+  if (!state.normalize) { setNormGain(1, 0.2); state.norm = null; return; }
+  ensureAudioGraph();
+  const stored = state.normalization[book.id];
+  if (typeof stored === 'number') {
+    setNormGain(stored, 0.3);
+    state.norm = { bookId: book.id, locked: true };
+  } else {
+    setNormGain(1, 0.1);
+    state.norm = { bookId: book.id, sumMS: 0, count: 0, peak: 0, locked: false };
+  }
+}
+
 let silenceSince = 0;
 // A short interval (not requestAnimationFrame): rAF is paused while the window
-// is hidden, but a background audiobook must keep skipping silence. Timers are
-// not throttled while the page is playing audio.
-function skipSilenceTick() {
-  if (!state.skipSilence || !audioGraph || el.audio.paused) {
+// is hidden, but a background audiobook must keep skipping silence / measuring.
+// Timers are not throttled while the page is playing audio.
+function audioTick() {
+  if (!audioGraph || el.audio.paused) {
     if (state.silenceBoosting) setSilenceBoost(false);
     silenceSince = 0;
     return;
   }
-  const now = performance.now();
-  const rms = currentRms();
-  if (rms < SILENCE_RMS) {
-    if (!silenceSince) silenceSince = now;
-    setSilenceBoost(now - silenceSince >= SILENCE_ENTER_MS);
-  } else {
-    silenceSince = 0;
-    setSilenceBoost(false); // snap back the instant speech returns
+  const { rms, peak } = currentLevel();
+
+  // --- skip silence ---
+  if (state.skipSilence) {
+    const now = performance.now();
+    if (rms < SILENCE_RMS) {
+      if (!silenceSince) silenceSince = now;
+      setSilenceBoost(now - silenceSince >= SILENCE_ENTER_MS);
+    } else {
+      silenceSince = 0;
+      setSilenceBoost(false); // snap back the instant speech returns
+    }
+  } else if (state.silenceBoosting) {
+    setSilenceBoost(false);
+  }
+
+  // --- loudness measurement ---
+  const m = state.norm;
+  if (state.normalize && m && !m.locked && rms > NORM_GATE_RMS) {
+    m.sumMS += rms * rms;
+    m.count += 1;
+    if (peak > m.peak) m.peak = peak;
+
+    if (m.count >= NORM_LOCK_SAMPLES) {
+      const gain = computeNormGain(m);
+      setNormGain(gain, 1.5);
+      m.locked = true;
+      state.normalization[m.bookId] = gain;
+      window.api.saveNormalization({ bookId: m.bookId, gain });
+    } else if (m.count >= NORM_WARMUP && m.count % NORM_UPDATE_EVERY === 0) {
+      setNormGain(computeNormGain(m), 1.5); // gently converge during the first listen
+    }
   }
 }
-setInterval(skipSilenceTick, 25);
+setInterval(audioTick, 25);
 
 /** Turn skip-silence on/off; builds and resumes the audio graph on demand. */
 function setSkipSilence(on) {
@@ -830,6 +917,21 @@ function setSkipSilence(on) {
     if (g && g.ctx.state === 'suspended') g.ctx.resume();
   } else {
     setSilenceBoost(false);
+  }
+}
+
+/** Turn volume normalization on/off. */
+function setNormalize(on) {
+  state.normalize = on;
+  localStorage.setItem('normalize', on ? '1' : '0');
+  el.normalizeBtn.setAttribute('aria-pressed', String(on));
+  if (on) {
+    const g = ensureAudioGraph();
+    if (g && g.ctx.state === 'suspended') g.ctx.resume();
+    if (state.playing) startNormalization(state.playing);
+  } else {
+    setNormGain(1, 0.3);
+    state.norm = null;
   }
 }
 
@@ -943,7 +1045,14 @@ function flushProgress() {
 
 /** Actual audio volume is the user's setting scaled by the sleep fade. */
 function applyVolume() {
-  el.audio.volume = Math.max(0, Math.min(1, state.userVolume * state.sleep.fadeGain));
+  const v = Math.max(0, Math.min(1, state.userVolume * state.sleep.fadeGain));
+  if (audioGraph) {
+    // Volume is a graph node once routed; keep the element at unity.
+    audioGraph.volumeGain.gain.setTargetAtTime(v, audioGraph.ctx.currentTime, 0.015);
+    el.audio.volume = 1;
+  } else {
+    el.audio.volume = v;
+  }
 }
 
 /**
@@ -1103,7 +1212,7 @@ el.audio.addEventListener('play', () => {
 
   // A Web Audio graph can only be built during/after a user gesture; first play
   // is our chance. Resume it too — the context suspends when idle.
-  if (state.skipSilence) {
+  if (state.skipSilence || state.normalize) {
     const g = ensureAudioGraph();
     if (g && g.ctx.state === 'suspended') g.ctx.resume();
   }
@@ -1184,6 +1293,7 @@ el.sortSelect.addEventListener('change', () => {
 });
 
 el.skipSilenceBtn.addEventListener('click', () => setSkipSilence(!state.skipSilence));
+el.normalizeBtn.addEventListener('click', () => setNormalize(!state.normalize));
 
 el.filterTabs.addEventListener('click', (e) => {
   const tab = e.target.closest('.filter-tab');
@@ -1222,6 +1332,9 @@ document.addEventListener('keydown', (e) => {
     case 's': case 'S':
       if (!el.player.classList.contains('hidden')) setSkipSilence(!state.skipSilence);
       break;
+    case 'n': case 'N':
+      if (!el.player.classList.contains('hidden')) setNormalize(!state.normalize);
+      break;
     case 't': case 'T':
       if (!el.player.classList.contains('hidden')) {
         openSleepMenu(el.sleepMenu.classList.contains('hidden'));
@@ -1242,6 +1355,7 @@ function applyState(next) {
   state.progress = next.progress;
   state.folders = next.folders;
   if (next.bookmarks) state.bookmarks = next.bookmarks;
+  if (next.normalization) state.normalization = next.normalization;
 
   // Keep the open book in sync with rescanned data.
   if (state.current) {
@@ -1273,5 +1387,6 @@ el.sortSelect.value = state.sort;
 el.audio.crossOrigin = 'anonymous';
 el.audio.preservesPitch = true;
 el.skipSilenceBtn.setAttribute('aria-pressed', String(state.skipSilence));
+el.normalizeBtn.setAttribute('aria-pressed', String(state.normalize));
 
 window.api.getState().then(applyState);

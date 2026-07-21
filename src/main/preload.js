@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('api', {
   addBookmark: (payload) => ipcRenderer.invoke('bookmarks:add', payload),
   updateBookmark: (payload) => ipcRenderer.invoke('bookmarks:update', payload),
   removeBookmark: (payload) => ipcRenderer.invoke('bookmarks:remove', payload),
+  saveNormalization: (payload) => ipcRenderer.invoke('normalization:save', payload),
   revealDataFolder: () => ipcRenderer.invoke('app:revealDataFolder'),
 
   onLibraryChanged: (cb) => {

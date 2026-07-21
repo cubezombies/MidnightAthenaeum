@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 
-const { USER_DATA, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, DATA_ROOT, COVER_CACHE } = require('./paths');
+const { USER_DATA, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE, DATA_ROOT, COVER_CACHE } = require('./paths');
 
 app.setName('Tomelight');
 
@@ -24,6 +24,8 @@ const libraryStore = new JsonStore(LIBRARY_FILE, { folders: [], books: [] });
 const progressStore = new JsonStore(PROGRESS_FILE, {});
 // { [bookId]: Array<{ id, position, label, note, auto, createdAt }> }
 const bookmarksStore = new JsonStore(BOOKMARKS_FILE, {});
+// { [bookId]: gain } — measured per-book loudness gain (linear multiplier)
+const normalizationStore = new JsonStore(NORMALIZATION_FILE, {});
 
 let mainWindow = null;
 let scanning = false;
@@ -83,6 +85,7 @@ function currentState() {
     books: books.map(toClientBook),
     progress: progressStore.get(),
     bookmarks: bookmarksStore.get(),
+    normalization: normalizationStore.get(),
     scanning,
   };
 }
@@ -318,6 +321,13 @@ function registerIpc() {
     return map;
   });
 
+  ipcMain.handle('normalization:save', (_event, { bookId, gain }) => {
+    if (typeof bookId !== 'string' || typeof gain !== 'number' || !Number.isFinite(gain)) return;
+    const map = { ...normalizationStore.get() };
+    map[bookId] = gain;
+    normalizationStore.set(map);
+  });
+
   ipcMain.handle('app:revealDataFolder', () => shell.openPath(DATA_ROOT));
 }
 
@@ -342,7 +352,7 @@ function normalizeCoverPaths(libraryState) {
 }
 
 app.whenReady().then(async () => {
-  await Promise.all([libraryStore.load(), progressStore.load(), bookmarksStore.load()]);
+  await Promise.all([libraryStore.load(), progressStore.load(), bookmarksStore.load(), normalizationStore.load()]);
   if (normalizeCoverPaths(libraryStore.get())) libraryStore.flush();
   registerMediaProtocol(getAllowedRoots);
   registerIpc();
@@ -365,4 +375,5 @@ app.on('before-quit', () => {
   libraryStore.flushSync();
   progressStore.flushSync();
   bookmarksStore.flushSync();
+  normalizationStore.flushSync();
 });
