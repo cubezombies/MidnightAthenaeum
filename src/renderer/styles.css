@@ -97,6 +97,39 @@ body {
 
 .scan-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
+/* ---------- Library folders popover ---------- */
+.folders { position: relative; }
+.folders-menu {
+  position: absolute; top: calc(100% + 8px); right: 0;
+  display: flex; flex-direction: column; width: 360px; max-width: 80vw;
+  background: var(--bg-elev-2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px; gap: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  z-index: 20;
+}
+.folders-menu-title { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
+
+.folders-list { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
+.folders-list .folders-empty { color: var(--muted); font-size: 13px; padding: 6px 2px; }
+.folder-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px; border-radius: 7px;
+}
+.folder-row:hover { background: var(--bg-elev); }
+.folder-info { min-width: 0; flex: 1; }
+.folder-path {
+  font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left; /* show the tail (…\Books\Fantasy) when it doesn't fit */
+}
+.folder-count { color: var(--muted); font-size: 12px; }
+.folder-remove {
+  background: transparent; border: none; color: var(--muted); cursor: pointer;
+  padding: 4px 8px; border-radius: 6px; font-size: 14px; flex-shrink: 0;
+}
+.folder-remove:hover { background: var(--danger-bg); color: var(--danger-text); }
+
+.folders-add { align-self: stretch; text-align: center; }
+
 input[type="search"] {
   background: var(--bg-elev-2);
   border: 1px solid var(--line);

@@ -19,7 +19,14 @@
       <input id="search" type="search" placeholder="Search title or author…" aria-label="Search library" />
       <button id="themeBtn" class="icon-btn theme-btn" title="Toggle light / dark theme" aria-label="Toggle theme">☀</button>
       <button id="rescanBtn" class="btn">Rescan</button>
-      <button id="addFolderBtn" class="btn btn-primary">Add folder</button>
+      <div class="extra folders">
+        <button id="foldersBtn" class="btn btn-primary" aria-haspopup="true" aria-expanded="false" title="Manage library folders">Folders</button>
+        <div id="foldersMenu" class="folders-menu hidden" role="menu">
+          <div class="folders-menu-title">Library folders</div>
+          <ul id="foldersList" class="folders-list"></ul>
+          <button id="addFolderBtn" class="btn btn-primary folders-add">Add folder</button>
+        </div>
+      </div>
     </div>
   </header>
 

@@ -119,15 +119,19 @@ just the parts that already used variables. The ☀/☾ button in the top bar
 overrides the OS choice and persists it; a tiny CSP-safe `theme-init.js` applies
 a saved override before the body paints, so there's no flash of the wrong theme.
 
-### 10. Library folder management (view + remove) — **S** ⚠️
-There is currently **no way to see or remove** a library folder once added —
-`state.folders` is stored and sent from the main process but never rendered
-anywhere in the UI. The removal path is worse than merely missing: `library:
-removeFolder` is fully implemented end-to-end (`main.js` handler, exposed on
-`window.api.removeFolder` in `preload.js`) but **no button anywhere calls it** —
-dead code sitting behind a UI that was never built. Needs a small settings
-surface: a list of added folders with a remove (✕) button per row, and the
-existing IPC just needs a caller.
+### 10. Library folder management (view + remove) — **shipped** ✅
+A **Folders** popover in the top bar (replacing the old standalone "Add folder"
+button) lists every library folder with its live book count and a ✕ to remove
+it — finally calling the `library:removeFolder` IPC that had been fully wired
+end-to-end but dead (no UI caller) since the very first commit. Removing a
+folder asks for confirmation via a native dialog first, since it can silently
+drop thousands of books in one click — more destructive than a typical action,
+so it didn't wait for the general confirm-before-destroy treatment (item 11).
+*Bug fixed along the way:* the folder→book match on both the removal path and
+the new book-count computation used a naive `startsWith`, which would wrongly
+match a folder like `E:\Books\Fan` against books actually under
+`E:\Books\Fantasy`. Replaced with a path-boundary-safe check
+(`isUnderFolder` in `main.js`), unit-tested directly.
 
 ### 11. Confirm before destructive actions — **S** ⚠️
 "Reset progress" and a bookmark's 🗑 both fire immediately on click — no
@@ -339,10 +343,11 @@ A pragmatic order that front-loads visible value and unblocks later work:
 6. **Whisper transcription & search, read-along** (Tier 2: 1, 6) — the flagship
    differentiators, once the data layer can hold their output.
 
-**Out-of-band priority:** items 10–12 (folder management, confirm-before-destroy,
-backup/export — all Tier 1, marked ⚠️) protect against real data loss or are
-dead-code gaps rather than missing polish, so they're worth doing whenever they're
-picked up rather than waiting for their slot in the sequence above.
+**Out-of-band priority:** items 10–12 (folder management — shipped; confirm-
+before-destroy; backup/export — all Tier 1, marked ⚠️) protect against real data
+loss or were dead-code gaps rather than missing polish, so the remaining two are
+worth doing whenever they're picked up rather than waiting for their slot in the
+sequence above.
 
 ---
 

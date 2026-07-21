@@ -34,6 +34,18 @@ function getAllowedRoots() {
   return libraryStore.get().folders ?? [];
 }
 
+/**
+ * Path-boundary-safe "is this book under this library folder" check. A naive
+ * `sourceDir.startsWith(folder)` would wrongly match "E:\Books\Fan" against a
+ * book under "E:\Books\Fantasy" — require an exact match or a following
+ * separator. Case-insensitive to match Windows path semantics.
+ */
+function isUnderFolder(sourceDir, folder) {
+  const a = sourceDir.toLowerCase();
+  const b = folder.toLowerCase();
+  return a === b || a.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+}
+
 /** Newest file mtime for a book, pulled from its cache signature ("path:mtime:size|…"). */
 function bookMtime(book) {
   if (!book.signature) return 0;
@@ -78,10 +90,20 @@ function toClientBook(book) {
   };
 }
 
+/** How many scanned books live under each library folder, for the folders UI. */
+function folderBookCounts(folders, books) {
+  const counts = {};
+  for (const folder of folders) {
+    counts[folder] = books.filter((b) => isUnderFolder(b.sourceDir, folder)).length;
+  }
+  return counts;
+}
+
 function currentState() {
   const { folders, books } = libraryStore.get();
   return {
     folders,
+    folderCounts: folderBookCounts(folders, books),
     books: books.map(toClientBook),
     progress: progressStore.get(),
     bookmarks: bookmarksStore.get(),
@@ -238,7 +260,7 @@ function registerIpc() {
   ipcMain.handle('library:removeFolder', (_event, folder) => {
     const state = libraryStore.get();
     const folders = state.folders.filter((f) => f !== folder);
-    const books = state.books.filter((b) => folders.some((f) => b.sourceDir.startsWith(f)));
+    const books = state.books.filter((b) => folders.some((f) => isUnderFolder(b.sourceDir, f)));
     libraryStore.set({ folders, books });
     return currentState();
   });

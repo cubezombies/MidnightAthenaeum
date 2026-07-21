@@ -32,7 +32,11 @@ npm start
 > terminal does this), `electron` runs as plain Node and no window appears.
 > Clear it first: `$env:ELECTRON_RUN_AS_NODE=$null`.
 
-On first launch, click **Add folder** and point it at your audiobook directory.
+On first launch, click **Folders** in the top bar to add your audiobook
+directory. The same panel lists every folder currently in your library — each
+with a live book count — and lets you remove one, which drops its books from
+Tomelight without touching anything on disk. Removing a folder that holds
+thousands of books asks for confirmation first, since there's no undo.
 
 ## How a library is interpreted
 

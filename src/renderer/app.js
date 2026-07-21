@@ -12,6 +12,8 @@ const el = {
   libraryView: $('libraryView'), bookView: $('bookView'),
   viewTitle: $('viewTitle'), backBtn: $('backBtn'), scanStatus: $('scanStatus'), themeBtn: $('themeBtn'),
   addFolderBtn: $('addFolderBtn'), emptyAddBtn: $('emptyAddBtn'), rescanBtn: $('rescanBtn'),
+  folders: document.querySelector('.folders'), foldersBtn: $('foldersBtn'), foldersMenu: $('foldersMenu'),
+  foldersList: $('foldersList'),
   bookCover: $('bookCover'), bookTitle: $('bookTitle'), bookAuthor: $('bookAuthor'),
   bookSub: $('bookSub'), bookDesc: $('bookDesc'), chapterList: $('chapterList'),
   chapterCount: $('chapterCount'), resetProgressBtn: $('resetProgressBtn'),
@@ -34,6 +36,7 @@ const state = {
   progress: {},
   bookmarks: {},       // { [bookId]: Bookmark[] }
   folders: [],
+  folderCounts: {},    // { [folder]: number of scanned books under it }
   current: null,       // book being viewed
   playing: null,       // book loaded in the player
   trackIndex: -1,      // which file of a multi-track book is loaded
@@ -283,6 +286,81 @@ function renderLibrary() {
   renderContinueShelf();
   renderGrid();
 }
+
+/* ---------------- library folders ---------------- */
+
+/** Trim a long path to its tail so the popover shows the meaningful part. */
+function shortenPath(p, max = 46) {
+  if (p.length <= max) return p;
+  return `…${p.slice(-(max - 1))}`;
+}
+
+function renderFoldersMenu() {
+  el.foldersList.replaceChildren();
+
+  if (!state.folders.length) {
+    const li = document.createElement('li');
+    li.className = 'folders-empty';
+    li.textContent = 'No folders added yet.';
+    el.foldersList.append(li);
+    return;
+  }
+
+  for (const folder of state.folders) {
+    const li = document.createElement('li');
+    li.className = 'folder-row';
+
+    const info = document.createElement('div');
+    info.className = 'folder-info';
+    const pathEl = document.createElement('div');
+    pathEl.className = 'folder-path';
+    pathEl.textContent = shortenPath(folder);
+    pathEl.title = folder;
+    const count = document.createElement('div');
+    count.className = 'folder-count';
+    const n = state.folderCounts[folder] ?? 0;
+    count.textContent = `${n.toLocaleString()} book${n === 1 ? '' : 's'}`;
+    info.append(pathEl, count);
+
+    const remove = document.createElement('button');
+    remove.className = 'folder-remove';
+    remove.textContent = '✕';
+    remove.title = 'Remove this folder from the library';
+    remove.setAttribute('aria-label', `Remove ${folder}`);
+    remove.addEventListener('click', () => removeFolder(folder, n));
+
+    li.append(info, remove);
+    el.foldersList.append(li);
+  }
+}
+
+async function removeFolder(folder, bookCount) {
+  // Removing a folder can silently drop hundreds of books in one click, unlike
+  // most other actions in the app — worth a native confirm even before the
+  // general confirm-before-destructive-action treatment lands.
+  const msg = bookCount
+    ? `Remove this folder from your library?\n\n${folder}\n\nThis removes ${bookCount.toLocaleString()} book${bookCount === 1 ? '' : 's'} from Tomelight. The files on disk are not touched.`
+    : `Remove this folder from your library?\n\n${folder}`;
+  if (!window.confirm(msg)) return;
+
+  const next = await window.api.removeFolder(folder);
+  applyState(next);
+  renderFoldersMenu();
+}
+
+function openFoldersMenu(open) {
+  el.foldersMenu.classList.toggle('hidden', !open);
+  el.foldersBtn.setAttribute('aria-expanded', String(open));
+  if (open) renderFoldersMenu();
+}
+
+el.foldersBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  openFoldersMenu(el.foldersMenu.classList.contains('hidden'));
+});
+document.addEventListener('click', (e) => {
+  if (!el.folders?.contains(e.target)) openFoldersMenu(false);
+});
 
 /** Books you're partway through, most-recently-played first. */
 function renderContinueShelf() {
@@ -1306,7 +1384,7 @@ el.filterTabs.addEventListener('click', (e) => {
   renderLibrary();
 });
 
-el.addFolderBtn.addEventListener('click', () => window.api.addFolder().then(applyState));
+el.addFolderBtn.addEventListener('click', () => window.api.addFolder().then((next) => { applyState(next); renderFoldersMenu(); }));
 el.emptyAddBtn.addEventListener('click', () => window.api.addFolder().then(applyState));
 el.rescanBtn.addEventListener('click', () => window.api.rescan().then(applyState));
 
@@ -1342,6 +1420,7 @@ document.addEventListener('keydown', (e) => {
       break;
     case 'Escape':
       if (!el.sleepMenu.classList.contains('hidden')) openSleepMenu(false);
+      else if (!el.foldersMenu.classList.contains('hidden')) openFoldersMenu(false);
       else if (el.libraryView.classList.contains('hidden')) goBack();
       break;
     default: break;
@@ -1354,6 +1433,7 @@ function applyState(next) {
   state.books = next.books;
   state.progress = next.progress;
   state.folders = next.folders;
+  if (next.folderCounts) state.folderCounts = next.folderCounts;
   if (next.bookmarks) state.bookmarks = next.bookmarks;
   if (next.normalization) state.normalization = next.normalization;
 
