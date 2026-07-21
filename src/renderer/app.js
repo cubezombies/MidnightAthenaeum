@@ -17,6 +17,7 @@ const el = {
   bookCover: $('bookCover'), bookTitle: $('bookTitle'), bookAuthor: $('bookAuthor'),
   bookSub: $('bookSub'), bookDesc: $('bookDesc'), chapterList: $('chapterList'),
   chapterCount: $('chapterCount'), resetProgressBtn: $('resetProgressBtn'),
+  finishedToggleBtn: $('finishedToggleBtn'),
   toast: $('toast'), toastMsg: $('toastMsg'), toastUndo: $('toastUndo'),
   bookmarkBtn: $('bookmarkBtn'), bookmarkHereBtn: $('bookmarkHereBtn'),
   bookmarkList: $('bookmarkList'), bookmarkCount: $('bookmarkCount'),
@@ -225,9 +226,13 @@ const GRID_PAGE = 120;
 
 function buildCard(book, { badge } = {}) {
   const saved = state.progress[book.id];
-  const pct = saved && book.duration
-    ? Math.min(100, (saved.position / book.duration) * 100)
-    : 0;
+  // A finished book always reads as a full bar, even if it was marked finished
+  // manually (e.g. "finished elsewhere") with little or no listening position
+  // actually recorded here — showing a near-empty bar for a "Finished" book
+  // would look like a bug.
+  const pct = isFinished(saved)
+    ? 100
+    : (saved && book.duration ? Math.min(100, (saved.position / book.duration) * 100) : 0);
 
   const card = document.createElement('div');
   card.className = 'card';
@@ -280,10 +285,15 @@ function buildCard(book, { badge } = {}) {
 }
 
 /** Where a book sits in its lifecycle, from saved progress. */
+/** True/false auto-computed from listening position, unless manually overridden. */
+function isFinished(p) {
+  return (p?.finishedOverride ?? p?.finished) || false;
+}
+
 function bookStatus(bookId) {
   const p = state.progress[bookId];
   if (!p) return 'new';
-  if (p.finished) return 'finished';
+  if (isFinished(p)) return 'finished';
   if (p.position > 30) return 'progress';
   return 'new';
 }
@@ -598,7 +608,22 @@ function openBook(bookId) {
 
   renderChapters(book);
   renderBookmarks(book);
+  updateFinishedButton(book);
   loadIntoPlayer(book);
+}
+
+/** Reflect the book's effective finished status on the toggle button's label. */
+function updateFinishedButton(book) {
+  const finished = isFinished(state.progress[book.id]);
+  el.finishedToggleBtn.textContent = finished ? 'Mark as not finished' : 'Mark as finished';
+  el.finishedToggleBtn.setAttribute('aria-pressed', String(finished));
+}
+
+/** Manually force (or clear) a book's finished status; wins over the auto-computed one. */
+async function setBookFinished(book, finished) {
+  state.progress = await window.api.setFinished({ bookId: book.id, finished });
+  updateFinishedButton(book);
+  renderLibrary();
 }
 
 function renderChapters(book) {
@@ -1465,11 +1490,18 @@ async function restoreProgress(book, previous) {
     duration: previous.duration,
     speed: previous.speed,
   });
+  // saveProgress only knows position/duration/speed; a manual finished mark
+  // needs its own round trip or it'd be lost (the record was just deleted, so
+  // there's nothing server-side for saveProgress to carry it forward from).
+  if (previous.finishedOverride != null) {
+    state.progress = await window.api.setFinished({ bookId: book.id, finished: previous.finishedOverride });
+  }
   if (state.playing?.id === book.id) {
     applySpeed(previous.speed ?? 1);
     seekTo(previous.position, { autoplay: false });
   }
   renderLibrary();
+  if (state.current?.id === book.id) updateFinishedButton(state.current);
 }
 
 el.resetProgressBtn.addEventListener('click', async () => {
@@ -1481,8 +1513,16 @@ el.resetProgressBtn.addEventListener('click', async () => {
   state.progress = await window.api.clearProgress(book.id);
   if (state.playing?.id === book.id) seekTo(0, { autoplay: false });
   renderLibrary();
+  updateFinishedButton(book); // clearing progress also clears any manual finished mark
 
   showToast('Progress reset.', () => restoreProgress(book, previous));
+});
+
+el.finishedToggleBtn.addEventListener('click', () => {
+  if (!state.current) return;
+  const book = state.current;
+  const currentlyFinished = isFinished(state.progress[book.id]);
+  setBookFinished(book, !currentlyFinished);
 });
 
 el.bookmarkBtn.addEventListener('click', () => addBookmark());
@@ -1535,6 +1575,7 @@ function applyState(next) {
       state.current = refreshed;
       renderChapters(refreshed);
       renderBookmarks(refreshed);
+      updateFinishedButton(refreshed);
     } else {
       showLibrary();
     }

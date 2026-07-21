@@ -182,6 +182,14 @@ The **Skip** dropdown in the player sets how far the ↺/↻ buttons and the pla
 match, and it's remembered across restarts. `Shift`+`←`/`→` is a separate, fixed
 5-minute jump either way.
 
+Finished status is normally automatic — a book counts as finished once you're
+within 30 seconds of the end — but the book view has a **Mark as finished / Mark
+as not finished** button for the two cases that can't detect on their own: a book
+you finished elsewhere (no listening position recorded here at all), or one you
+gave up on that's sitting at 99% and cluttering "In progress." The button always
+wins over the automatic guess until you toggle it again or use **Reset progress**,
+which clears the override along with everything else.
+
 ### Series grouping
 
 The **Group series** toggle collapses the volumes of a series into a single tile

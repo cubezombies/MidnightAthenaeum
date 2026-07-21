@@ -392,6 +392,10 @@ function registerIpc() {
       position,
       duration: duration ?? progress[bookId]?.duration ?? 0,
       finished: duration ? position >= duration - 30 : false,
+      // A manual finished/unfinished mark (below) must survive routine
+      // playback saves, which happen every few seconds — carry it forward
+      // rather than letting it get silently overwritten mid-listen.
+      finishedOverride: progress[bookId]?.finishedOverride ?? null,
       speed: speed ?? progress[bookId]?.speed ?? 1,
       updatedAt: Date.now(),
     };
@@ -401,6 +405,31 @@ function registerIpc() {
   ipcMain.handle('progress:clear', (_event, bookId) => {
     const progress = { ...progressStore.get() };
     delete progress[bookId];
+    progressStore.set(progress);
+    return progress;
+  });
+
+  /**
+   * Manually force (or clear) a book's finished status, independent of the
+   * auto-computed value from position/duration -- covers "I finished this
+   * elsewhere" (no listening progress here at all) and "I DNF'd this, get it
+   * out of In Progress" alike. `finished` is true, false, or null to go back
+   * to letting position/duration decide. Creates a progress record if the
+   * book has none yet, since marking a never-opened book finished is a real
+   * use case.
+   */
+  ipcMain.handle('progress:setFinished', (_event, { bookId, finished }) => {
+    if (typeof bookId !== 'string') return progressStore.get();
+    const progress = { ...progressStore.get() };
+    const existing = progress[bookId];
+    progress[bookId] = {
+      position: existing?.position ?? 0,
+      duration: existing?.duration ?? 0,
+      finished: existing?.finished ?? false,
+      finishedOverride: finished,
+      speed: existing?.speed ?? 1,
+      updatedAt: Date.now(),
+    };
     progressStore.set(progress);
     return progress;
   });

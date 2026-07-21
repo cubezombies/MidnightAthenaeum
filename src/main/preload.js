@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('api', {
   rescan: () => ipcRenderer.invoke('library:rescan'),
   saveProgress: (payload) => ipcRenderer.invoke('progress:save', payload),
   clearProgress: (bookId) => ipcRenderer.invoke('progress:clear', bookId),
+  setFinished: (payload) => ipcRenderer.invoke('progress:setFinished', payload),
   addBookmark: (payload) => ipcRenderer.invoke('bookmarks:add', payload),
   updateBookmark: (payload) => ipcRenderer.invoke('bookmarks:update', payload),
   removeBookmark: (payload) => ipcRenderer.invoke('bookmarks:remove', payload),

@@ -170,12 +170,25 @@ deliberately separate, fixed "big skip" — not part of this setting.
 immediately (no stale button label before the first click) and that a corrupted
 localStorage value falls back safely rather than breaking the buttons.
 
-### 14. Manual "mark as finished / not finished" — **S**
-Finished status is purely automatic (`position >= duration - 30`) — there's no
-way to manually mark a book done (e.g. you finished it elsewhere, or DNF'd it and
-want it out of "In progress") or to un-finish one. Confirmed as a real gap even
-in mainstream apps, not unique to this one. A right-click / row action on the
-book view alongside "Reset progress" covers it.
+### 14. Manual "mark as finished / not finished" — **shipped** ✅
+A toggle button in the book view, next to "Reset progress", covers both cases:
+a book finished elsewhere (marks finished with zero listening position recorded
+— the card still shows a full progress bar rather than a confusing empty one),
+and a DNF'd book stuck near the end that you want out of "In progress" (marks it
+explicitly not-finished, which beats the auto-computed value).
+
+Stored as `finishedOverride: true | false | null` alongside the existing
+`finished` (auto-computed) field — `null` means "let position/duration decide,"
+which is what every book starts at. The tricky part was making sure the override
+actually survives: the periodic auto-save that runs during normal playback
+rewrites the whole progress record every few seconds, so it had to be explicitly
+carried forward there or a manual mark would silently vanish mid-listen. The
+"Reset progress" Undo (item 11) needed the same care — restoring only
+position/duration/speed and not the override would have "un-undone" a finished
+mark that was in effect right before the reset.
+*Tested:* 27 checks — including the override surviving a routine position
+auto-save, and Undo-after-Reset restoring the override together with position,
+verified round-tripped through the backend rather than just in-memory state.
 
 ### 15. Chapter list search — **S**
 Long chapter lists have no search or jump — and this library has real cases that

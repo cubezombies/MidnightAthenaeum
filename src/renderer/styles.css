@@ -287,6 +287,7 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 .book-meta p { margin: 0 0 5px; }
 .desc { margin-top: 12px !important; color: var(--muted); max-width: 640px; max-height: 96px; overflow-y: auto; }
 .book-actions { margin-top: 16px; }
+.finished-toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 
 .section-label { font-size: 14px; margin: 0 0 12px; font-weight: 600; }
 
