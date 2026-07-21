@@ -98,13 +98,13 @@ On resume, rewinds a few seconds scaled to how long you were paused (0 under 30s
 3s, 10s, up to 20s after an hour+). Kept separate from the sleep timer's fixed
 30s resume-rewind.
 
-### 7. Library organization: sort, filter, series & collections — **mostly shipped** ✅
-Filter tabs and **series grouping** (collapse a series' volumes into one tile, with
-a drill-in view) both ship — series parsed from the title, author-guarded. **Still
-open:** sort options (author / title / recently added / duration), and better
-series coverage. Title-parsing groups ~30% of books (~360 series); the misses are
-un-numbered series (Dune's prequels, standalone novellas) and folder-numbered
-books whose title omits the series — those want the sidecar/online metadata below.
+### 7. Library organization: sort, filter, series & collections — **shipped** ✅
+Filter tabs, **sort** (author / title / recently added / recently played /
+longest / shortest), and **series grouping** (collapse a series' volumes into one
+tile, with a drill-in view) all ship. **Still open:** better series coverage —
+title-parsing groups ~30% of books (~360 series); the misses are un-numbered
+series (Dune's prequels, standalone novellas) and folder-numbered books whose
+title omits the series — those want the sidecar/online metadata below.
 
 ### 8. "Continue listening" shelf + finished state — **shipped** ✅
 In-progress books surface in a row at the top of the library, most-recently-played
@@ -118,6 +118,61 @@ etc.) were pulled into variables too, so the whole UI actually re-themes, not
 just the parts that already used variables. The ☀/☾ button in the top bar
 overrides the OS choice and persists it; a tiny CSP-safe `theme-init.js` applies
 a saved override before the body paints, so there's no flash of the wrong theme.
+
+### 10. Library folder management (view + remove) — **S** ⚠️
+There is currently **no way to see or remove** a library folder once added —
+`state.folders` is stored and sent from the main process but never rendered
+anywhere in the UI. The removal path is worse than merely missing: `library:
+removeFolder` is fully implemented end-to-end (`main.js` handler, exposed on
+`window.api.removeFolder` in `preload.js`) but **no button anywhere calls it** —
+dead code sitting behind a UI that was never built. Needs a small settings
+surface: a list of added folders with a remove (✕) button per row, and the
+existing IPC just needs a caller.
+
+### 11. Confirm before destructive actions — **S** ⚠️
+"Reset progress" and a bookmark's 🗑 both fire immediately on click — no
+confirmation, no undo. Losing your position in a 40-hour book (or a bookmark
+with notes) to one misclick is a real, easy-to-hit failure mode with the current
+UI. A simple `confirm()`-style inline "Are you sure?" state (or a brief "Undo"
+toast after the action) closes this cheaply.
+
+### 12. Backup / export of app data — **S/M** ⚠️
+Progress, bookmarks, and normalization gains each live in their own JSON file
+under the data folder (`progress.json`, `bookmarks.json`, `normalization.json`)
+with no backup path — delete or corrupt that folder and months of reading
+position and notes are gone. A "Backup now" (zip the three files) and "Restore
+from backup" action, reachable from Help or the data-folder area, is cheap
+insurance and pairs naturally with the existing "Open data folder" menu item.
+
+### 13. Customizable skip amounts — **S**
+The back/forward skip is fixed at 30s (and 5 min with Shift). Real-world
+audiobook apps commonly let users set this per their preference (10/15/30/45/60s)
+— confirmed as a live user ask in current app reviews, not just a guess. Small:
+a settings field plus reading the value into the existing `seekTo` calls.
+
+### 14. Manual "mark as finished / not finished" — **S**
+Finished status is purely automatic (`position >= duration - 30`) — there's no
+way to manually mark a book done (e.g. you finished it elsewhere, or DNF'd it and
+want it out of "In progress") or to un-finish one. Confirmed as a real gap even
+in mainstream apps, not unique to this one. A right-click / row action on the
+book view alongside "Reset progress" covers it.
+
+### 15. Chapter list search — **S**
+Long chapter lists have no search or jump — and this library has real cases that
+hurt: *Wind and Truth* alone has **212 chapters**. Scrolling to find one by eye is
+the actual experience today. A simple filter input above `#chapterList` (like the
+library search) would fix this directly.
+
+### 16. Drag-and-drop to add a folder — **S**
+Dropping a folder onto the window is standard desktop-app behavior and currently
+unsupported (`Add folder` only opens the native picker). Small: a `dragover`/
+`drop` handler on the window that resolves to the same `library:addFolder` flow.
+
+### 17. "Recently added" indicator on cards — **S**
+Sort has a "Recently added" mode, but nothing marks *which* books are new at a
+glance while browsing normally — no small "NEW" badge or similar. Minor, but a
+common convention (Spotify/Netflix-style "new since you last opened" markers)
+that this library's constant-growth use case would benefit from.
 
 ---
 
@@ -284,6 +339,11 @@ A pragmatic order that front-loads visible value and unblocks later work:
 6. **Whisper transcription & search, read-along** (Tier 2: 1, 6) — the flagship
    differentiators, once the data layer can hold their output.
 
+**Out-of-band priority:** items 10–12 (folder management, confirm-before-destroy,
+backup/export — all Tier 1, marked ⚠️) protect against real data loss or are
+dead-code gaps rather than missing polish, so they're worth doing whenever they're
+picked up rather than waiting for their slot in the sequence above.
+
 ---
 
 ## Sources / prior art
@@ -297,3 +357,5 @@ Feature landscape informed by current audiobook players and reviews:
 - [Chapters (transcription + bookmark search)](https://chapters.mobileappster.co.uk/)
 - [Abookio (stats & streaks)](https://apps.apple.com/us/app/abookio-audiobook-player/id6754542041)
 - [Best audiobook players for Windows](https://windowsreport.com/audiobook-players/)
+- [For the Joy of Books — best audiobook apps 2026](https://forthejoyofbooks.com/best-audiobook-app/) (customizable skip amounts)
+- [Goodreads / Spotify community threads on marking audiobooks finished](https://www.goodreads.com/topic/show/17957277-marking-books-as-read) (manual finished-state gap)
