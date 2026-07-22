@@ -8,6 +8,10 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-22
+### Added
+- A Ko-fi donation link in **About Tomelight**.
+
 ## [0.2.1] - 2026-07-22
 ### Fixed
 - Restarting to install a downloaded update showed the full interactive NSIS
