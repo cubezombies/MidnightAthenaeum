@@ -34,6 +34,12 @@
       "output": "dist",
       "buildResources": "build"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "cubezombies",
+      "repo": "Tomelight",
+      "releaseType": "release"
+    },
     "files": [
       "src/**/*",
       "assets/**/*",
