@@ -81,7 +81,12 @@ async function checkForUpdates() {
 }
 
 function quitAndInstall() {
-  autoUpdater.quitAndInstall();
+  // Without isSilent=true, electron-updater re-runs the NSIS installer in its
+  // normal interactive mode — the full wizard pops up (confirmed by testing:
+  // a "Tomelight Setup" window, not a background install) even though this
+  // is an "assisted" (oneClick: false) installer, defeating the point of an
+  // automatic update. isForceRunAfter=true relaunches the app once it's done.
+  autoUpdater.quitAndInstall(true, true);
 }
 
 module.exports = { setStatusSink, checkForUpdates, quitAndInstall };

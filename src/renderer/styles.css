@@ -610,8 +610,20 @@ select {
 
 .updates-notes { border-top: 1px solid var(--line); padding-top: 10px; }
 .updates-notes-body {
-  margin: 6px 0 0; max-height: 220px; overflow-y: auto;
-  white-space: pre-wrap; word-wrap: break-word;
+  margin: 6px 0 0; max-height: 220px; overflow-y: auto; overflow-wrap: break-word;
   font: 13px/1.5 inherit; color: var(--muted);
   background: var(--bg-elev-2); border-radius: 8px; padding: 10px 12px;
 }
+/* GitHub renders the CHANGELOG.md section's markdown as HTML for us. */
+.updates-notes-body h1, .updates-notes-body h2, .updates-notes-body h3 {
+  margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--text);
+}
+.updates-notes-body p { margin: 0 0 8px; }
+.updates-notes-body p:last-child { margin-bottom: 0; }
+.updates-notes-body ul, .updates-notes-body ol { margin: 0 0 8px; padding-left: 18px; }
+.updates-notes-body li { margin: 3px 0; }
+.updates-notes-body strong { color: var(--text); font-weight: 600; }
+.updates-notes-body code {
+  background: var(--bg-elev); border-radius: 4px; padding: 1px 5px; font-size: 12px;
+}
+.updates-notes-body a { color: var(--accent); }

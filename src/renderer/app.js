@@ -1877,7 +1877,11 @@ function renderUpdateStatus(status) {
   if (notes) {
     el.updatesNotes.classList.remove('hidden');
     el.updatesNotesTitle.textContent = version ? `What's new in ${version}` : "What's new";
-    el.updatesNotesBody.textContent = notes;
+    // electron-updater's releaseNotes is GitHub's HTML rendering of our own
+    // CHANGELOG.md section (headings/lists), not arbitrary user input — safe
+    // to inject, and the page's CSP (script-src 'self', no unsafe-inline)
+    // would block any injected script/inline-handler from running regardless.
+    el.updatesNotesBody.innerHTML = notes;
   } else {
     el.updatesNotes.classList.add('hidden');
   }

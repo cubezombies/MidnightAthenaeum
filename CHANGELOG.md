@@ -8,6 +8,17 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-22
+### Fixed
+- Restarting to install a downloaded update showed the full interactive NSIS
+  install wizard instead of installing quietly in the background — found by
+  actually running the update flow end to end against a real published
+  release, not just the check/download steps. `quitAndInstall()` now runs
+  silently and relaunches the app automatically once done.
+- The "What's new" text in the update dialog showed raw HTML tags (`<h3>`,
+  `<li>`, …) instead of rendering them — GitHub returns the changelog section
+  as rendered HTML, not plain text.
+
 ## [0.2.0] - 2026-07-22
 ### Added
 - In-app update checking: **Help → Check for Updates…** checks GitHub
