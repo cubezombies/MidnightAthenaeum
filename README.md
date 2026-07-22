@@ -45,33 +45,53 @@ is rejected with a toast rather than silently doing nothing.
 
 ## Installer
 
-For a normal install (rather than running from source), build a Windows
-installer with [electron-builder](https://www.electron.build/):
+The easiest way to install Tomelight is to grab the prebuilt installer from
+[**Releases**](https://github.com/cubezombies/Tomelight/releases/latest) —
+download `Tomelight-Setup-<version>.exe` and run it. No admin rights needed.
+
+It's a per-user NSIS installer — the standard default install location
+(`%LOCALAPPDATA%\Programs\Tomelight`), no admin rights needed. It adds Start
+Menu and Desktop shortcuts and registers an entry in *Settings → Apps* with
+its own uninstaller (`Uninstall Tomelight.exe`, also reachable from Apps). The
+"Choose Install Location" page lets you pick a different folder if you'd
+rather — e.g. this developer's own machine installs everything to `D:`, a
+personal convention with no bearing on where it installs for anyone else.
+Uninstalling removes the installed program files and shortcuts only — it
+never touches the data folder described below, so your library, progress, and
+bookmarks survive an uninstall/reinstall.
+
+The installer is unsigned (no code-signing certificate), so Windows SmartScreen
+will show an "unrecognized publisher" warning on first run — click **More
+info → Run anyway**.
+
+*Tested:* a full cycle using the actual downloaded release asset (not just a
+local build) — downloaded `Tomelight-Setup-0.1.0.exe` from the published
+Release, verified its SHA-256 against the digest GitHub recorded for it,
+installed it silently to the default `%LOCALAPPDATA%\Programs\Tomelight`
+location, confirmed the installed app loads the real library over IPC exactly
+like the dev build, then uninstalled and confirmed the install directory,
+shortcuts, and registry entry were gone while the data folder was untouched.
+
+### Building it yourself
 
 ```powershell
 npm install
 npm run dist
 ```
 
-This produces `dist\Tomelight-Setup-<version>.exe` — a per-user NSIS
-installer, so it doesn't need admin rights. It defaults the install location
-to `D:\Claude\Tomelight-App` (this project's everything-on-D: convention; the
-installer's "Choose Install Location" page lets you pick a different folder if
-you'd rather), adds Start Menu and Desktop shortcuts, and registers an entry
-in *Settings → Apps* with its own uninstaller (`Uninstall Tomelight.exe`, also
-reachable from Apps). Uninstalling removes the installed program files and
-shortcuts only — it never touches the data folder described below, so your
-library, progress, and bookmarks survive an uninstall/reinstall.
+produces `dist\Tomelight-Setup-<version>.exe` the same way the Release build
+does. `npm run pack` builds an unpacked `dist\win-unpacked\` folder instead,
+for a quick smoke test without going through the installer.
 
-The installer is unsigned (no code-signing certificate), so Windows SmartScreen
-will show an "unrecognized publisher" warning on first run — click **More
-info → Run anyway**. `npm run pack` builds an unpacked `dist\win-unpacked\`
-folder instead, for a quick smoke test without going through the installer.
+### Cutting a release
 
-*Tested:* a full real install → launch → uninstall cycle on this machine —
-confirmed the installed app loads the real library over IPC exactly like the
-dev build, and that uninstalling removes the install directory, both
-shortcuts, and the registry entry while leaving the data folder untouched.
+Pushing a tag matching `v*.*.*` (e.g. `v0.1.1`) runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
+the installer on `windows-latest` and publishes it to a GitHub Release via
+electron-builder's GitHub provider — so bumping `version` in `package.json`,
+tagging, and pushing the tag is the whole release process. The workflow can
+also be re-run manually (`workflow_dispatch`) against an existing tag if a
+run needs retrying.
 
 ## How a library is interpreted
 

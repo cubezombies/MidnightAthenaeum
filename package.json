@@ -63,8 +63,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Tomelight",
-      "artifactName": "Tomelight-Setup-${version}.${ext}",
-      "include": "build/installer.nsh"
+      "artifactName": "Tomelight-Setup-${version}.${ext}"
     }
   }
 }

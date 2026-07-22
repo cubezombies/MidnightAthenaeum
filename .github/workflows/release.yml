@@ -32,3 +32,14 @@ jobs:
         run: npx electron-builder --win --x64 --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # electron-builder's own draft->published finalize step has been flaky
+      # in testing (assets uploaded and the release correctly tagged, but left
+      # sitting as a draft) — explicitly un-drafting via `gh` afterward is a
+      # more reliable belt-and-suspenders finish. Only runs for an actual tag
+      # push, since workflow_dispatch on a branch has no tag to publish.
+      - name: Ensure the release is published, not left as a draft
+        if: startsWith(github.ref, 'refs/tags/')
+        run: gh release edit "${{ github.ref_name }}" --draft=false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
