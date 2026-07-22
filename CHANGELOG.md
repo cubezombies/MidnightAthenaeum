@@ -8,6 +8,13 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-22
+### Changed
+- Real branding art for Midnight Athenaeum (previous release still carried
+  the old Tomelight banner/icon, since the new art wasn't ready yet). App
+  icon is cropped from the new banner the same way as before — the emblem
+  only, no wordmark, so it stays legible down to taskbar sizes.
+
 ## [0.4.0] - 2026-07-22
 ### Changed
 - Renamed from **Tomelight** to **Midnight Athenaeum**. The Tomelight name
