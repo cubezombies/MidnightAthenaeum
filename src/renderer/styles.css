@@ -589,3 +589,29 @@ select {
 .metadata-preview-body { min-width: 0; flex: 1; }
 .metadata-preview-body h4 { margin: 0 0 4px; font-size: 15px; }
 .metadata-preview-body .desc { max-height: 120px; }
+
+/* ---------- Updates ---------- */
+.updates-btn { position: relative; }
+.updates-dot {
+  position: absolute; top: 5px; right: 5px;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); border: 1.5px solid var(--bg-elev);
+}
+
+.updates-status { font-size: 13px; color: var(--text); min-height: 18px; }
+
+.updates-progress-track {
+  height: 6px; border-radius: 3px; background: var(--bg-elev-2); overflow: hidden;
+}
+.updates-progress-fill {
+  height: 100%; width: 0%; background: var(--accent);
+  transition: width .2s ease;
+}
+
+.updates-notes { border-top: 1px solid var(--line); padding-top: 10px; }
+.updates-notes-body {
+  margin: 6px 0 0; max-height: 220px; overflow-y: auto;
+  white-space: pre-wrap; word-wrap: break-word;
+  font: 13px/1.5 inherit; color: var(--muted);
+  background: var(--bg-elev-2); border-radius: 8px; padding: 10px 12px;
+}

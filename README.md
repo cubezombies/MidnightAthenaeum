@@ -19,7 +19,8 @@ The app icon is generated from `assets/logo.png` — the emblem is cropped out
 (tweak the `CROP` constants in `scripts/make-icons.cjs` if the framing shifts).
 
 Planned features, differentiators, and performance work are tracked in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+[docs/ROADMAP.md](docs/ROADMAP.md). Released versions and what changed in each
+are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## Running it
 
@@ -72,6 +73,19 @@ location, confirmed the installed app loads the real library over IPC exactly
 like the dev build, then uninstalled and confirmed the install directory,
 shortcuts, and registry entry were gone while the data folder was untouched.
 
+### Checking for updates
+
+**Help → Check for Updates…** (or the ⬇ button in the top bar) checks GitHub
+Releases for a newer version. It's entirely manual — nothing is checked
+automatically on launch or in the background. If a newer version exists it
+shows what changed (pulled from that release's [CHANGELOG.md](CHANGELOG.md)
+section) and downloads it in the background; once the download finishes,
+**Restart & Install** quits and runs the new installer over the current one
+(or **Later**, and it installs automatically the next time you quit normally).
+A small dot on the ⬇ button marks a downloaded-and-ready update even if you
+dismissed the dialog. Update checks only work in an installed build — the dev
+copy (`npm start`) shows a message explaining that rather than erroring.
+
 ### Building it yourself
 
 ```powershell
@@ -85,13 +99,19 @@ for a quick smoke test without going through the installer.
 
 ### Cutting a release
 
-Pushing a tag matching `v*.*.*` (e.g. `v0.1.1`) runs
-[`.github/workflows/release.yml`](.github/workflows/release.yml), which builds
-the installer on `windows-latest` and publishes it to a GitHub Release via
-electron-builder's GitHub provider — so bumping `version` in `package.json`,
-tagging, and pushing the tag is the whole release process. The workflow can
-also be re-run manually (`workflow_dispatch`) against an existing tag if a
-run needs retrying.
+1. Add a `## [x.y.z] - YYYY-MM-DD` section to [CHANGELOG.md](CHANGELOG.md)
+   (move the `[Unreleased]` items into it) describing what changed — this is
+   what both the GitHub Release page and the in-app update dialog show.
+2. Bump `version` in `package.json` to match.
+3. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+Pushing the tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
+which builds the installer on `windows-latest`, publishes it to a GitHub
+Release via electron-builder's GitHub provider, and sets the release's notes
+from the CHANGELOG.md section for that version (failing the build if that
+section is missing, so a release can't accidentally ship without notes). The
+workflow can also be re-run manually (`workflow_dispatch`) against an
+existing tag if a run needs retrying.
 
 ## How a library is interpreted
 

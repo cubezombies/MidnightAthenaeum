@@ -30,6 +30,12 @@ const el = {
   metadataPreviewCover: $('metadataPreviewCover'), metadataPreviewTitle: $('metadataPreviewTitle'),
   metadataPreviewAuthor: $('metadataPreviewAuthor'), metadataPreviewDesc: $('metadataPreviewDesc'),
   metadataApplyBtn: $('metadataApplyBtn'), metadataBackBtn: $('metadataBackBtn'),
+  updatesBtn: $('updatesBtn'), updatesDot: $('updatesDot'),
+  updatesModal: $('updatesModal'), updatesModalClose: $('updatesModalClose'),
+  updatesCurrentVersion: $('updatesCurrentVersion'), updatesStatus: $('updatesStatus'),
+  updatesProgressTrack: $('updatesProgressTrack'), updatesProgressFill: $('updatesProgressFill'),
+  updatesNotes: $('updatesNotes'), updatesNotesTitle: $('updatesNotesTitle'), updatesNotesBody: $('updatesNotesBody'),
+  updatesCheckBtn: $('updatesCheckBtn'), updatesInstallBtn: $('updatesInstallBtn'), updatesLaterBtn: $('updatesLaterBtn'),
   toast: $('toast'), toastMsg: $('toastMsg'), toastUndo: $('toastUndo'),
   dropOverlay: $('dropOverlay'),
   bookmarkBtn: $('bookmarkBtn'), bookmarkHereBtn: $('bookmarkHereBtn'),
@@ -94,6 +100,8 @@ const state = {
   onlineMetadataEnabled: localStorage.getItem('onlineMetadataEnabled') === '1',
   metadataResults: [],   // last Open Library search results for the modal
   metadataPicked: null,  // the candidate currently shown in the preview pane
+  appVersion: null,      // this build's version, fetched once from the main process
+  update: { state: 'idle' }, // last status pushed from updater.js: { state, version, releaseNotes, percent, error }
   viewingSeries: null, // the series group currently shown in the series view
   bookReturnsToSeries: null, // where the book view's back button should return
   pausedAt: 0,         // timestamp of the last pause, for resume auto-rewind
@@ -1830,6 +1838,93 @@ el.metadataRevertBtn.addEventListener('click', async () => {
   const next = await window.api.clearMetadata(state.current.id);
   applyState(next);
   showToast('Reverted to the file\'s own tags.');
+});
+
+/* ----------------
+ * Updates — every check is user-initiated (the topbar button or the Help
+ * menu), never automatic. electron-updater auto-downloads once it finds a
+ * newer version (see src/main/updater.js) and reports progress through
+ * update:status events; this just reflects that state into the modal and a
+ * small topbar dot so an update sitting ready-to-install isn't easy to miss
+ * even if the modal itself has been closed.
+ * ---------------- */
+
+function closeUpdatesModal() {
+  el.updatesModal.classList.add('hidden');
+}
+
+function openUpdatesModal() {
+  el.updatesModal.classList.remove('hidden');
+  renderUpdateStatus(state.update);
+  // Re-check on open unless one's already in flight, or an update is already
+  // downloaded and just waiting on Install/Later — nothing to re-check there.
+  const s = state.update.state;
+  if (s !== 'checking' && s !== 'downloading' && s !== 'downloaded') window.api.checkForUpdates();
+}
+
+/** Whether an update is sitting available/downloading/ready — worth a topbar dot even with the modal closed. */
+function updateIsPending(status) {
+  return status.state === 'available' || status.state === 'downloading' || status.state === 'downloaded';
+}
+
+function renderUpdateStatus(status) {
+  el.updatesDot.classList.toggle('hidden', !updateIsPending(status));
+
+  // status is always state.update (merged from every event so far) — a
+  // 'downloading' progress tick carries no releaseNotes/version of its own,
+  // so the fields from the earlier 'available' event stay put on the object.
+  const { releaseNotes: notes, version } = status;
+  if (notes) {
+    el.updatesNotes.classList.remove('hidden');
+    el.updatesNotesTitle.textContent = version ? `What's new in ${version}` : "What's new";
+    el.updatesNotesBody.textContent = notes;
+  } else {
+    el.updatesNotes.classList.add('hidden');
+  }
+
+  el.updatesProgressTrack.classList.toggle('hidden', status.state !== 'downloading');
+  el.updatesProgressFill.style.width = `${status.state === 'downloading' ? status.percent ?? 0 : 0}%`;
+
+  const showInstall = status.state === 'downloaded';
+  el.updatesInstallBtn.classList.toggle('hidden', !showInstall);
+  el.updatesLaterBtn.classList.toggle('hidden', !showInstall);
+  el.updatesCheckBtn.classList.toggle('hidden', showInstall);
+  el.updatesCheckBtn.disabled = status.state === 'checking' || status.state === 'downloading';
+
+  switch (status.state) {
+    case 'checking': el.updatesStatus.textContent = 'Checking for updates…'; break;
+    case 'available': el.updatesStatus.textContent = `Update ${status.version} found — downloading…`; break;
+    case 'downloading': el.updatesStatus.textContent = `Downloading update… ${status.percent ?? 0}%`; break;
+    case 'downloaded': el.updatesStatus.textContent = `Update ${status.version} is ready to install.`; break;
+    case 'not-available': el.updatesStatus.textContent = `You're up to date (${state.appVersion ?? 'current version'}).`; break;
+    case 'error': el.updatesStatus.textContent = status.error; break;
+    default: el.updatesStatus.textContent = '';
+  }
+}
+
+el.updatesBtn.addEventListener('click', openUpdatesModal);
+el.updatesModalClose.addEventListener('click', closeUpdatesModal);
+el.updatesLaterBtn.addEventListener('click', closeUpdatesModal);
+el.updatesModal.addEventListener('click', (e) => {
+  if (e.target === el.updatesModal) closeUpdatesModal();
+});
+el.updatesModal.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.stopPropagation(); closeUpdatesModal(); }
+});
+el.updatesCheckBtn.addEventListener('click', () => window.api.checkForUpdates());
+el.updatesInstallBtn.addEventListener('click', () => window.api.installUpdate());
+
+window.api.onUpdateStatus((status) => {
+  // A later 'downloading' progress tick has no releaseNotes/version of its
+  // own — carry the ones from the 'available' event forward so the notes
+  // panel doesn't blank out mid-download.
+  state.update = { ...state.update, ...status };
+  renderUpdateStatus(state.update);
+});
+window.api.onOpenUpdates(() => openUpdatesModal());
+window.api.getAppVersion().then((v) => {
+  state.appVersion = v;
+  el.updatesCurrentVersion.textContent = v;
 });
 
 /* ---------------- drag-and-drop a folder onto the window ---------------- */

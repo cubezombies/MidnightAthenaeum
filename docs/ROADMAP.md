@@ -53,6 +53,12 @@ Already shipped, so it is not repeated in the lists below:
   high-res cover, cached locally so the app stays offline-first after applying
   (Tier 2 #5, shipped). Series-splitting from the original ask was descoped —
   see the item for why.
+- **Windows installer + in-app updates** — an NSIS installer/uninstaller
+  (`electron-builder`, standard per-user default location) built and
+  published to GitHub Releases by CI on every version tag. **Help → Check for
+  Updates…** checks Releases manually (never automatic), auto-downloads a
+  newer version in the background, and shows its change notes pulled from
+  `CHANGELOG.md`. Shipped 2026-07-22.
 
 Known gaps carried forward as motivation: series volumes can share a display
 title, box sets stay whole, and merged `.m4b` parts collapse to one chapter each.

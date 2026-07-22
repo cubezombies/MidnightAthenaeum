@@ -35,11 +35,17 @@ jobs:
 
       # electron-builder's own draft->published finalize step has been flaky
       # in testing (assets uploaded and the release correctly tagged, but left
-      # sitting as a draft) — explicitly un-drafting via `gh` afterward is a
-      # more reliable belt-and-suspenders finish. Only runs for an actual tag
-      # push, since workflow_dispatch on a branch has no tag to publish.
-      - name: Ensure the release is published, not left as a draft
+      # sitting as a draft) — explicitly finishing it here via `gh` is a more
+      # reliable belt-and-suspenders step. Also sets the release body from
+      # CHANGELOG.md's section for this version, which is both the human-
+      # readable release notes on GitHub *and* what electron-updater reads as
+      # releaseNotes for the in-app "Check for Updates" screen. Only runs for
+      # an actual tag push, since workflow_dispatch on a branch has no tag
+      # (and no changelog section) to publish.
+      - name: Finalize the release (notes + un-draft)
         if: startsWith(github.ref, 'refs/tags/')
-        run: gh release edit "${{ github.ref_name }}" --draft=false
+        run: |
+          node scripts/extract-changelog.cjs "${{ github.ref_name }}" release-notes.md
+          gh release edit "${{ github.ref_name }}" --notes-file release-notes.md --draft=false
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

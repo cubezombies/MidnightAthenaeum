@@ -1,7 +1,7 @@
 {
   "name": "tomelight",
   "productName": "Tomelight",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Tomelight — a desktop audiobook player with m4b chapter support and a sleep timer",
   "main": "src/main/main.js",
   "author": "cubezombies",
@@ -19,6 +19,7 @@
     "png-to-ico": "^3.0.2"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "music-metadata": "^11.0.0"
   },
   "allowScripts": {
@@ -48,7 +49,12 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "build/icon.ico"
     },

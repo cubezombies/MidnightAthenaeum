@@ -21,6 +21,7 @@ const { JsonStore } = require('./store');
 const { scanLibrary } = require('./library');
 const { registerScheme, registerMediaProtocol, mediaUrl } = require('./media-protocol');
 const { searchOpenLibrary, fetchWorkDescription, downloadCover } = require('./metadata-lookup');
+const updater = require('./updater');
 
 registerScheme();
 
@@ -360,7 +361,14 @@ function buildMenu() {
     },
     {
       label: 'Help',
-      submenu: [{ label: 'About Tomelight', click: () => openAbout() }],
+      submenu: [
+        {
+          label: 'Check for Updates…',
+          click: () => mainWindow?.webContents.send('updates:open'),
+        },
+        { type: 'separator' },
+        { label: 'About Tomelight', click: () => openAbout() },
+      ],
     },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -583,6 +591,10 @@ function registerIpc() {
   });
 
   ipcMain.handle('app:revealDataFolder', () => shell.openPath(DATA_ROOT));
+  ipcMain.handle('app:getVersion', () => app.getVersion());
+
+  ipcMain.handle('updates:check', () => updater.checkForUpdates());
+  ipcMain.handle('updates:install', () => updater.quitAndInstall());
 
   ipcMain.handle('metadata:search', async (_event, query) => searchOpenLibrary(query));
 
@@ -667,6 +679,7 @@ app.whenReady().then(async () => {
   registerIpc();
   buildMenu();
   createWindow();
+  updater.setStatusSink((status) => mainWindow?.webContents.send('update:status', status));
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

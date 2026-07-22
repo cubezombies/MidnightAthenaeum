@@ -20,10 +20,13 @@ contextBridge.exposeInMainWorld('api', {
   restoreBookmark: (payload) => ipcRenderer.invoke('bookmarks:restore', payload),
   saveNormalization: (payload) => ipcRenderer.invoke('normalization:save', payload),
   revealDataFolder: () => ipcRenderer.invoke('app:revealDataFolder'),
+  getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
   searchMetadata: (query) => ipcRenderer.invoke('metadata:search', query),
   previewMetadata: (key) => ipcRenderer.invoke('metadata:preview', key),
   applyMetadata: (payload) => ipcRenderer.invoke('metadata:apply', payload),
   clearMetadata: (bookId) => ipcRenderer.invoke('metadata:clear', bookId),
+  checkForUpdates: () => ipcRenderer.invoke('updates:check'),
+  installUpdate: () => ipcRenderer.invoke('updates:install'),
 
   onLibraryChanged: (cb) => {
     const listener = (_event, state) => cb(state);
@@ -34,5 +37,15 @@ contextBridge.exposeInMainWorld('api', {
     const listener = (_event, payload) => cb(payload);
     ipcRenderer.on('library:scan-progress', listener);
     return () => ipcRenderer.off('library:scan-progress', listener);
+  },
+  onUpdateStatus: (cb) => {
+    const listener = (_event, status) => cb(status);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.off('update:status', listener);
+  },
+  onOpenUpdates: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('updates:open', listener);
+    return () => ipcRenderer.off('updates:open', listener);
   },
 });

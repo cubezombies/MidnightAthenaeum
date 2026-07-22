@@ -18,6 +18,9 @@
       <span id="scanStatus" class="scan-status" role="status" aria-live="polite"></span>
       <input id="search" type="search" placeholder="Search title or author…" aria-label="Search library" />
       <button id="themeBtn" class="icon-btn theme-btn" title="Toggle light / dark theme" aria-label="Toggle theme">☀</button>
+      <button id="updatesBtn" class="icon-btn updates-btn" title="Check for updates" aria-label="Check for updates">
+        ⬇<span id="updatesDot" class="updates-dot hidden"></span>
+      </button>
       <button id="rescanBtn" class="btn">Rescan</button>
       <div class="extra folders">
         <button id="foldersBtn" class="btn btn-primary" aria-haspopup="true" aria-expanded="false" title="Manage library folders">Folders</button>
@@ -235,6 +238,32 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="updatesModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="updatesModalTitle">
+    <div class="modal-box updates-modal">
+      <div class="modal-header">
+        <h3 id="updatesModalTitle">Check for Updates</h3>
+        <button id="updatesModalClose" class="icon-btn" aria-label="Close">✕</button>
+      </div>
+
+      <p class="muted small">You have version <b id="updatesCurrentVersion">—</b>.</p>
+      <div id="updatesStatus" class="updates-status" role="status" aria-live="polite">Checking for updates…</div>
+      <div id="updatesProgressTrack" class="updates-progress-track hidden">
+        <div id="updatesProgressFill" class="updates-progress-fill"></div>
+      </div>
+
+      <div id="updatesNotes" class="updates-notes hidden">
+        <h4 id="updatesNotesTitle" class="section-label">What's new</h4>
+        <pre id="updatesNotesBody" class="updates-notes-body"></pre>
+      </div>
+
+      <div class="modal-actions">
+        <button id="updatesCheckBtn" class="btn btn-primary">Check again</button>
+        <button id="updatesInstallBtn" class="btn btn-primary hidden">Restart &amp; Install</button>
+        <button id="updatesLaterBtn" class="btn btn-quiet hidden">Later</button>
       </div>
     </div>
   </div>
