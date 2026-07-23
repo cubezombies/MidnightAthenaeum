@@ -674,6 +674,50 @@ body.playing .toast { bottom: calc(var(--player-h) + 20px); }
 .metadata-preview-body h4 { margin: 0 0 4px; font-size: 15px; }
 .metadata-preview-body .desc { max-height: 120px; }
 
+/* ---------- Transcription & transcript search ---------- */
+.transcribe-status { margin-top: 8px; }
+#captionsBtn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+
+/* Live caption line shown in the book view while this book is playing. */
+.captions-bar {
+  margin: -14px 0 22px;
+  padding: 12px 16px;
+  background: var(--bg-elev); border: 1px solid var(--line); border-radius: 10px;
+  font-size: 15px; line-height: 1.5; text-align: center;
+}
+
+.transcript-search-form {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 0 10px;
+}
+.transcript-search-form .icon { color: var(--muted); }
+.transcript-search-form input[type="search"] {
+  flex: 1; width: auto; background: none; border: none; padding: 9px 0;
+}
+.transcript-search-form input[type="search"]:focus { border: none; }
+
+.transcript-results {
+  list-style: none; margin: 10px 0 0; padding: 0;
+  overflow-y: auto; max-height: 360px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.transcript-result {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 9px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; background: none; width: 100%; text-align: left;
+  color: var(--text); font: inherit;
+}
+.transcript-result:hover { background: var(--bg-elev-2); }
+.transcript-result:focus-visible { border-color: var(--accent); outline: none; }
+.transcript-result-time {
+  color: var(--accent); font-size: 12px; font-variant-numeric: tabular-nums; flex-shrink: 0;
+}
+.transcript-result-text { min-width: 0; font-size: 13px; line-height: 1.4; }
+.transcript-result-text mark {
+  background: var(--accent-soft); color: var(--accent); border-radius: 3px; padding: 0 1px;
+}
+
 /* ---------- Updates ---------- */
 .updates-btn { position: relative; }
 .updates-dot {

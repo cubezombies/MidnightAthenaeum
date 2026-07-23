@@ -45,6 +45,11 @@ contextBridge.exposeInMainWorld('api', {
   setPlayingState: (isPlaying) => ipcRenderer.invoke('player:setPlayingState', isPlaying),
   setDiscordPresenceEnabled: (enabled) => ipcRenderer.invoke('discord:setEnabled', enabled),
   updateDiscordActivity: (info) => ipcRenderer.invoke('discord:updateActivity', info),
+  startTranscription: (bookId) => ipcRenderer.invoke('transcribe:start', bookId),
+  cancelTranscription: (bookId) => ipcRenderer.invoke('transcribe:cancel', bookId),
+  getTranscribeStatus: (bookId) => ipcRenderer.invoke('transcribe:getStatus', bookId),
+  getTranscript: (bookId) => ipcRenderer.invoke('transcript:get', bookId),
+  deleteTranscript: (bookId) => ipcRenderer.invoke('transcript:delete', bookId),
 
   onLibraryChanged: (cb) => {
     const listener = (_event, state) => cb(state);
@@ -75,5 +80,10 @@ contextBridge.exposeInMainWorld('api', {
     const listener = (_event, bookId) => cb(bookId);
     ipcRenderer.on('player:openBook', listener);
     return () => ipcRenderer.off('player:openBook', listener);
+  },
+  onTranscribeProgress: (cb) => {
+    const listener = (_event, info) => cb(info);
+    ipcRenderer.on('transcribe:progress', listener);
+    return () => ipcRenderer.off('transcribe:progress', listener);
   },
 });

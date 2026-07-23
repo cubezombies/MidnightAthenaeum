@@ -31,6 +31,13 @@ const el = {
   metadataPreviewCover: $('metadataPreviewCover'), metadataPreviewTitle: $('metadataPreviewTitle'),
   metadataPreviewAuthor: $('metadataPreviewAuthor'), metadataPreviewDesc: $('metadataPreviewDesc'),
   metadataApplyBtn: $('metadataApplyBtn'), metadataBackBtn: $('metadataBackBtn'),
+  transcribeBtn: $('transcribeBtn'), cancelTranscribeBtn: $('cancelTranscribeBtn'),
+  searchTranscriptBtn: $('searchTranscriptBtn'), captionsBtn: $('captionsBtn'),
+  deleteTranscriptBtn: $('deleteTranscriptBtn'), transcribeStatus: $('transcribeStatus'),
+  captionsBar: $('captionsBar'),
+  transcriptModal: $('transcriptModal'), transcriptModalClose: $('transcriptModalClose'),
+  transcriptSearchForm: $('transcriptSearchForm'), transcriptQuery: $('transcriptQuery'),
+  transcriptStatus: $('transcriptStatus'), transcriptResults: $('transcriptResults'),
   updatesBtn: $('updatesBtn'), updatesDot: $('updatesDot'), discordBtn: $('discordBtn'),
   updatesModal: $('updatesModal'), updatesModalClose: $('updatesModalClose'),
   updatesCurrentVersion: $('updatesCurrentVersion'), updatesStatus: $('updatesStatus'),
@@ -122,6 +129,15 @@ const state = {
     fadeGain: 1,       // 1 normally, ramps to 0 over the closing fade
     firedPaused: false,// true when the timer paused us (so resume rewinds)
   },
+  // Transcription (local Whisper) — transcribeState tracks the book currently
+  // shown in the book view; transcriptCache holds loaded transcripts keyed by
+  // bookId so re-opening the search modal or toggling captions doesn't
+  // re-fetch over IPC every time. Captions are a simple global toggle, same
+  // pattern as skip-silence/normalize.
+  transcribeState: { bookId: null, phase: null, percent: 0 },
+  transcriptCache: new Map(), // bookId -> { segments: [...] } | null (null = fetched, has none)
+  captionsOn: localStorage.getItem('captionsOn') === '1',
+  captionIndex: -1, // index into the current transcript's segments last shown as a caption
 };
 
 let gridObserver = null;
@@ -743,6 +759,7 @@ function openBook(bookId) {
   renderBookmarks(book);
   updateFinishedButton(book);
   updateMetadataUI(book);
+  updateTranscribeUI(book);
   loadIntoPlayer(book);
 }
 
@@ -1066,6 +1083,8 @@ function loadIntoPlayer(book) {
   state.playing = book;
   state.activeChapter = -1;
   state.trackIndex = -1;
+  state.captionIndex = -1;
+  el.captionsBar.classList.add('hidden');
 
   el.player.classList.remove('hidden');
   document.body.classList.add('playing');
@@ -1412,6 +1431,8 @@ function updateTimeUI() {
       // Chromium throws if duration/position momentarily disagree mid-seek — harmless, next tick corrects it.
     }
   }
+
+  updateCaption();
 }
 
 function jumpChapter(delta) {
@@ -1993,6 +2014,222 @@ el.metadataRevertBtn.addEventListener('click', async () => {
   patchBook(next.book);
   showToast('Reverted to the file\'s own tags.');
 });
+
+/* ----------------
+ * Transcription (local Whisper) — opt-in, per book. transcribe:start returns
+ * immediately once accepted; transcribe:progress events carry live updates,
+ * and updateTranscribeUI() re-syncs the button states from the main process
+ * (rather than trusting only the last progress event) whenever a book is
+ * opened, since transcription keeps running in the background regardless of
+ * which book is currently shown.
+ * ---------------- */
+
+function transcribeStatusText(info) {
+  const label = {
+    model: 'Downloading speech model…',
+    convert: 'Preparing audio…',
+    transcribe: 'Transcribing…',
+  }[info.phase] || 'Working…';
+  return `${label} ${Math.round(info.percent)}%`;
+}
+
+async function updateTranscribeUI(book) {
+  const status = await window.api.getTranscribeStatus(book.id);
+  // The user may have navigated to a different book while this was in flight.
+  if (state.current?.id !== book.id) return;
+
+  const mine = status.isTranscribing;
+  el.transcribeBtn.classList.toggle('hidden', !status.available || mine || status.hasTranscript);
+  el.transcribeBtn.disabled = status.anyTranscribing && !mine;
+  el.transcribeBtn.textContent = el.transcribeBtn.disabled ? 'Transcribing another book…' : 'Transcribe this book';
+  el.cancelTranscribeBtn.classList.toggle('hidden', !mine);
+  el.searchTranscriptBtn.classList.toggle('hidden', !status.hasTranscript);
+  el.captionsBtn.classList.toggle('hidden', !status.hasTranscript);
+  el.deleteTranscriptBtn.classList.toggle('hidden', !status.hasTranscript);
+
+  el.transcribeStatus.classList.toggle('hidden', !mine);
+  if (mine && state.transcribeState.bookId === book.id) {
+    el.transcribeStatus.textContent = transcribeStatusText(state.transcribeState);
+  } else if (!mine) {
+    el.transcribeStatus.textContent = '';
+  }
+}
+
+el.transcribeBtn.addEventListener('click', async () => {
+  if (!state.current) return;
+  const book = state.current;
+  const result = await window.api.startTranscription(book.id);
+  if (!result.ok) {
+    showToast(result.error || 'Could not start transcription.');
+    return;
+  }
+  state.transcribeState = { bookId: book.id, phase: 'model', percent: 0 };
+  updateTranscribeUI(book);
+});
+
+el.cancelTranscribeBtn.addEventListener('click', () => {
+  if (state.current) window.api.cancelTranscription(state.current.id);
+});
+
+el.deleteTranscriptBtn.addEventListener('click', async () => {
+  if (!state.current) return;
+  if (!window.confirm("Delete this book's transcript? You can transcribe it again later.")) return;
+  const book = state.current;
+  await window.api.deleteTranscript(book.id);
+  state.transcriptCache.delete(book.id);
+  updateTranscribeUI(book);
+});
+
+window.api.onTranscribeProgress((info) => {
+  state.transcribeState = info;
+  if (state.current?.id !== info.bookId) return;
+
+  if (info.phase === 'error') showToast(`Transcription failed: ${info.error || 'unknown error'}`);
+  if (info.phase === 'complete') {
+    state.transcriptCache.delete(info.bookId); // stale "no transcript" cache entry, if any
+    showToast('Transcript ready — search it from the book view.');
+  }
+  updateTranscribeUI(state.current);
+});
+
+/**
+ * Loads (and caches) a book's transcript; null means "fetched, has none."
+ * De-dupes concurrent callers for the same book — updateCaption() calls this
+ * on every timeupdate tick (several times a second) until the cache is
+ * populated, which without this would fire that many redundant IPC round
+ * trips before the first one even resolves.
+ */
+const transcriptFetchesInFlight = new Map(); // bookId -> Promise
+function ensureTranscriptLoaded(bookId) {
+  if (state.transcriptCache.has(bookId)) return Promise.resolve(state.transcriptCache.get(bookId));
+  if (transcriptFetchesInFlight.has(bookId)) return transcriptFetchesInFlight.get(bookId);
+
+  const promise = window.api.getTranscript(bookId).then((data) => {
+    state.transcriptCache.set(bookId, data);
+    transcriptFetchesInFlight.delete(bookId);
+    return data;
+  });
+  transcriptFetchesInFlight.set(bookId, promise);
+  return promise;
+}
+
+function closeTranscriptModal() {
+  el.transcriptModal.classList.add('hidden');
+}
+
+el.searchTranscriptBtn.addEventListener('click', async () => {
+  if (!state.current) return;
+  el.transcriptModal.classList.remove('hidden');
+  el.transcriptQuery.value = '';
+  el.transcriptResults.replaceChildren();
+  el.transcriptStatus.textContent = 'Loading transcript…';
+  el.transcriptQuery.focus();
+
+  const data = await ensureTranscriptLoaded(state.current.id);
+  el.transcriptStatus.textContent = data
+    ? `${data.segments.length.toLocaleString()} lines — type to search.`
+    : 'No transcript available.';
+});
+el.transcriptModalClose.addEventListener('click', closeTranscriptModal);
+el.transcriptModal.addEventListener('click', (e) => {
+  if (e.target === el.transcriptModal) closeTranscriptModal();
+});
+el.transcriptModal.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.stopPropagation(); closeTranscriptModal(); }
+});
+
+function escapeHtml(s) {
+  return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+el.transcriptSearchForm.addEventListener('submit', (e) => e.preventDefault());
+el.transcriptQuery.addEventListener('input', () => {
+  const book = state.current;
+  const data = book && state.transcriptCache.get(book.id);
+  if (!data) return;
+
+  const q = el.transcriptQuery.value.trim().toLowerCase();
+  el.transcriptResults.replaceChildren();
+  if (!q) {
+    el.transcriptStatus.textContent = `${data.segments.length.toLocaleString()} lines — type to search.`;
+    return;
+  }
+
+  const matches = data.segments.filter((s) => s.text.toLowerCase().includes(q));
+  el.transcriptStatus.textContent = matches.length
+    ? `${matches.length.toLocaleString()} match${matches.length === 1 ? '' : 'es'}`
+    : 'No matches found.';
+
+  const highlightRe = new RegExp(`(${escapeRegExp(q)})`, 'ig');
+  const frag = document.createDocumentFragment();
+  // A very common word could match thousands of lines in a long audiobook —
+  // cap the render rather than building an enormous result list.
+  for (const seg of matches.slice(0, 300)) {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.className = 'transcript-result';
+
+    const time = document.createElement('span');
+    time.className = 'transcript-result-time';
+    time.textContent = formatTime(seg.start);
+
+    const text = document.createElement('span');
+    text.className = 'transcript-result-text';
+    text.innerHTML = escapeHtml(seg.text).replace(highlightRe, '<mark>$1</mark>');
+
+    btn.append(time, text);
+    btn.addEventListener('click', () => {
+      closeTranscriptModal();
+      if (state.playing?.id !== book.id) loadIntoPlayer(book);
+      seekTo(seg.start, { autoplay: true });
+    });
+    li.append(btn);
+    frag.append(li);
+  }
+  el.transcriptResults.append(frag);
+});
+
+/** Turn live captions on/off. Off by default; only meaningful for a book that has a transcript. */
+function setCaptions(on) {
+  state.captionsOn = on;
+  localStorage.setItem('captionsOn', on ? '1' : '0');
+  el.captionsBtn.setAttribute('aria-pressed', String(on));
+  state.captionIndex = -1;
+  if (!on) el.captionsBar.classList.add('hidden');
+}
+el.captionsBtn.addEventListener('click', () => setCaptions(!state.captionsOn));
+el.captionsBtn.setAttribute('aria-pressed', String(state.captionsOn));
+
+/**
+ * Updates the live caption line for whatever's playing, if captions are on
+ * and that book has a (already-loaded) transcript. Called from updateTimeUI
+ * alongside the existing chapter-tracking — same "only touch the DOM when
+ * the segment actually changes" shape.
+ */
+function updateCaption() {
+  if (!state.captionsOn || !state.playing) return;
+  const data = state.transcriptCache.get(state.playing.id);
+  if (!data) {
+    // Fetch once in the background; nothing to show until it resolves.
+    if (data === undefined) ensureTranscriptLoaded(state.playing.id).then(() => updateCaption());
+    return;
+  }
+  const position = globalTime();
+  const idx = data.segments.findIndex((s) => position >= s.start && position < s.end);
+  if (idx === state.captionIndex) return;
+  state.captionIndex = idx;
+
+  const onBookView = state.current?.id === state.playing.id && !el.bookView.classList.contains('hidden');
+  if (idx === -1 || !onBookView) {
+    el.captionsBar.classList.add('hidden');
+    return;
+  }
+  el.captionsBar.textContent = data.segments[idx].text;
+  el.captionsBar.classList.remove('hidden');
+}
 
 /* ----------------
  * Updates — every check is user-initiated (the topbar button or the Help

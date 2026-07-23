@@ -61,6 +61,12 @@ module.exports = {
   BOOKMARKS_FILE: path.join(DATA_ROOT, 'bookmarks.json'),
   NORMALIZATION_FILE: path.join(DATA_ROOT, 'normalization.json'),
   METADATA_FILE: path.join(DATA_ROOT, 'metadata-overrides.json'),
+  // Per-book timestamped transcripts (opt-in, local Whisper transcription).
+  TRANSCRIPTS_DIR: path.join(DATA_ROOT, 'transcripts'),
+  // The downloaded ggml model file(s) — large (100MB+), kept out of backups
+  // and re-downloadable, so it lives alongside rather than inside the other
+  // small JSON stores.
+  WHISPER_MODEL_DIR: path.join(DATA_ROOT, 'whisper-models'),
   // Default location backups are offered/looked for. A sibling of DATA_ROOT
   // (not inside it) on purpose: deleting or corrupting the live data folder
   // must not take the backups down with it.

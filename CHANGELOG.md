@@ -8,6 +8,32 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-22
+### Added
+- **Local, offline transcription and full-text search inside audiobooks.**
+  "Transcribe this book" (book view) runs `ffmpeg-static` +
+  `@kutalia/whisper-node-addon` (prebuilt whisper.cpp bindings) entirely
+  on-device — no audio or text ever leaves your machine. GPU acceleration
+  (Vulkan) is used automatically when available, with a CPU/BLAS fallback.
+  Multi-track books get correct per-track timestamp offsets merged into one
+  transcript. Once transcribed: **Search transcript** finds matching spoken
+  lines and jumps straight to that moment, and a captions toggle shows the
+  current line live while that book plays. One book transcribes at a time;
+  the ~148MB English model downloads once, on first use.
+
+  The real risk here was native-binary packaging through Electron's asar,
+  not the transcription itself: `require()`-loading the native addon from
+  inside `app.asar` works transparently, but `child_process.spawn()` does
+  **not** — it needs a real filesystem path and fails silently (`ENOENT`)
+  on the virtual asar one. Fixed by rewriting the ffmpeg path to
+  `app.asar.unpacked` before spawning it. This — along with GPU detection,
+  multi-track offset math, and the full pipeline — was verified end-to-end
+  against a real packaged build and real generated speech audio before any
+  UI was built on top of it, not assumed to work from documentation alone.
+
+  Per-chapter summaries (mentioned as a future extension) are out of scope
+  for this pass — Whisper transcribes, it doesn't summarize.
+
 ## [0.4.9] - 2026-07-22
 ### Added
 - **Discord Rich Presence** — shows "Listening to *The Way of Kings* — Ch.

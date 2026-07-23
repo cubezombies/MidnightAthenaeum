@@ -72,6 +72,14 @@ Already shipped, so it is not repeated in the lists below:
   cooldown, since the library doesn't reliably fail fast on its own (Tier 2
   #7, shipped). Needs a Discord Application ID (`DISCORD_CLIENT_ID`) to
   actually activate; inert without one. Shipped 2026-07-22.
+- **Local Whisper transcription + search** — opt-in, per book: "Transcribe
+  this book" runs `ffmpeg-static` + `@kutalia/whisper-node-addon` fully
+  offline (GPU via Vulkan auto-detected, CPU/BLAS fallback), then "Search
+  transcript" jumps straight to any spoken line, and a captions toggle shows
+  the current line live (Tier 2 #1, shipped). Native-binary packaging through
+  asar was the real risk here, not transcription itself — verified against
+  an actual packaged build before shipping. Per-chapter summaries descoped
+  (needs its own model/approach). Shipped 2026-07-22.
 
 Known gaps carried forward as motivation: series volumes can share a display
 title, box sets stay whole, and merged `.m4b` parts collapse to one chapter each.
@@ -309,13 +317,28 @@ targets, so this is additive, not a rewrite).
 
 Where this app can be better than what exists, not just equal to it.
 
-### 1. Local full-text search inside audiobooks (Whisper) — **L** ⭐
-Transcribe books locally with `whisper.cpp` (offline, no cloud, GPU-optional),
-store a timestamped transcript, and let the user search *the spoken words* —
-"find where they first mention the sword" — and jump to that moment. Also enables
-readable captions and per-chapter summaries. A handful of iOS apps ("Chapters")
-do surrounding-text transcription; essentially **no Windows player does this**.
-Transcription is a slow background job, which fits the existing task model.
+### 1. Local full-text search inside audiobooks (Whisper) — **shipped** ✅
+Per-book, opt-in "Transcribe this book" (book view) runs entirely offline:
+`ffmpeg-static` converts each track to 16kHz mono PCM, `@kutalia/whisper-node-addon`
+(prebuilt whisper.cpp bindings, GPU via Vulkan auto-detected with a CPU/BLAS
+fallback) transcribes it, and multi-track books get per-track timestamp
+offsets merged into one flat transcript. "Search transcript" finds matching
+lines and jumps straight to that moment; a captions toggle shows the current
+line live while that book plays. One book transcribes at a time; the ~148MB
+English model downloads once, on first use, into the data folder.
+
+Packaging native binaries through Electron's asar turned out to be the real
+risk, not the transcription itself — `require()`-loading a native `.node`
+addon from inside `app.asar` works transparently, but `child_process.spawn()`
+does **not**: it needs a real path and fails silently (`ENOENT`) on the
+virtual asar one. Fixed by rewriting the ffmpeg path to `app.asar.unpacked`
+before spawning it, verified against an actual packaged build (not assumed)
+before shipping. GPU acceleration, multi-track offset math, and the full
+pipeline were also verified end-to-end against real generated speech audio
+before any UI was built on top of them.
+
+*Descoped from this pass:* per-chapter summaries (Whisper transcribes, it
+doesn't summarize — a real feature, needs its own model/approach decision).
 *Foundation for:* semantic bookmarks, "quote this passage", accessibility.
 
 ### 2. Windows System Media Transport Controls (SMTC) — **shipped** ✅

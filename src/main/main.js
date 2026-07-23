@@ -46,6 +46,7 @@ const { searchOpenLibrary, fetchWorkDescription, downloadCover } = require('./me
 const updater = require('./updater');
 const taskbar = require('./taskbar');
 const discord = require('./discord-presence');
+const transcriber = require('./transcribe');
 
 registerScheme();
 
@@ -852,6 +853,57 @@ function registerIpc() {
       refreshJumpList();
     }
     return { book: clientBookById(bookId) };
+  });
+
+  /**
+   * Local, offline transcription (opt-in, per book — see transcribe.js).
+   * transcribe:start returns immediately once the job is accepted; progress
+   * and completion are pushed separately via transcribe:progress, the same
+   * fire-and-forget-plus-events shape as the library scan.
+   */
+  ipcMain.handle('transcribe:start', (_event, bookId) => {
+    if (typeof bookId !== 'string') return { ok: false, error: 'Invalid book.' };
+    if (!transcriber.isAvailable()) return { ok: false, error: 'Transcription is not available in this build.' };
+    if (transcriber.anyTranscribing()) {
+      return { ok: false, error: 'Already transcribing another book — wait for it to finish first.' };
+    }
+    const raw = libraryStore.get().books.find((b) => b.id === bookId);
+    if (!raw) return { ok: false, error: 'Book not found.' };
+
+    transcriber.transcribeBook(raw, (info) => {
+      mainWindow?.webContents.send('transcribe:progress', { bookId, ...info });
+    }).then((result) => {
+      mainWindow?.webContents.send('transcribe:progress', {
+        bookId,
+        phase: result ? 'complete' : 'cancelled',
+        percent: result ? 100 : 0,
+      });
+    }).catch((err) => {
+      console.error('[transcribe] failed:', err);
+      mainWindow?.webContents.send('transcribe:progress', { bookId, phase: 'error', percent: 0, error: err.message });
+    });
+
+    return { ok: true };
+  });
+
+  ipcMain.handle('transcribe:cancel', (_event, bookId) => {
+    if (typeof bookId === 'string') transcriber.cancelTranscription(bookId);
+  });
+
+  ipcMain.handle('transcribe:getStatus', (_event, bookId) => ({
+    available: transcriber.isAvailable(),
+    hasTranscript: typeof bookId === 'string' && transcriber.hasTranscript(bookId),
+    isTranscribing: typeof bookId === 'string' && transcriber.isTranscribing(bookId),
+    anyTranscribing: transcriber.anyTranscribing(),
+  }));
+
+  ipcMain.handle('transcript:get', (_event, bookId) => {
+    if (typeof bookId !== 'string') return null;
+    return transcriber.loadTranscript(bookId);
+  });
+
+  ipcMain.handle('transcript:delete', (_event, bookId) => {
+    if (typeof bookId === 'string') transcriber.deleteTranscript(bookId);
   });
 
   // One-shot: consumed by the renderer on bootstrap so a jump-list launch

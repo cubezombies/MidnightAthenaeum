@@ -281,6 +281,33 @@ books to build a reliable feature on — it's a metadata-correction tool
 Midnight Athenaeum) and the [known series-tagged-title limitation](#known-limitations)
 above are unaffected by this feature.
 
+## Transcription & transcript search
+
+**Transcribe this book** (book view) runs a book through
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) entirely offline —
+no audio or text ever leaves your machine. Each track is converted to 16kHz
+mono PCM with a bundled `ffmpeg`, then transcribed; GPU acceleration (Vulkan)
+is used automatically when available, falling back to CPU otherwise. The
+first transcription downloads a ~148MB English speech model once, into the
+data folder, then reuses it for every book after that.
+
+Once transcribed, **Search transcript** finds every line matching a phrase
+and jumps straight to that moment — "find where they first mention the
+sword" — and a captions toggle shows the current line live while that book
+plays. Only one book transcribes at a time; a long audiobook can take
+anywhere from a few minutes (GPU) to a couple of hours (CPU-only), so it's
+opt-in per book rather than a whole-library job.
+
+It's off by default in the sense that nothing transcribes until you ask —
+there's no separate opt-in gate beyond clicking the button, since (unlike
+the online metadata lookup) nothing here ever leaves the machine. **Delete
+transcript** removes a book's saved transcript if you want the disk space
+back or want to re-run it later.
+
+Per-chapter summaries are out of scope for now — Whisper transcribes, it
+doesn't summarize, and doing that well would need its own model/approach
+decision rather than an extension of this feature.
+
 ## Keyboard
 
 | Key | Action |
