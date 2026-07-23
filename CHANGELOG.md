@@ -8,6 +8,28 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-22
+### Added
+- **File → Change library location…** and **Reset library location to
+  default** — relocating where Midnight Athenaeum stores its data no longer
+  requires manually setting an environment variable. Picking a folder that
+  already has a `library.json` in it switches to it directly (nothing is
+  moved, the old location is left untouched); picking an empty folder moves
+  the current library index, progress, bookmarks, and cached covers there.
+  Either way the app restarts to apply it.
+
+### Fixed
+- The data location is now tracked in a small file at the standard app-data
+  path instead of only an environment variable. A location set purely via an
+  environment variable could appear to "lose" the library after certain
+  relaunches (including the one an in-app update triggers) if the new
+  process didn't inherit that variable — a real, if confusing-looking, issue
+  hit on this developer's own machine. The underlying data was never
+  actually at risk, only the pointer to it, and real installed users were
+  never affected (this only applies to a location set outside the app in the
+  first place) — but the new file-based mechanism is immune to this class of
+  problem for everyone going forward.
+
 ## [0.4.2] - 2026-07-22
 ### Fixed
 - The "Continue Listening" jump list refresh (which runs every few seconds

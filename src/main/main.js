@@ -2,12 +2,14 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 
 const {
   USER_DATA, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
-  METADATA_FILE, DATA_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, BACKUP_DIR,
+  METADATA_FILE, DATA_ROOT, OS_DEFAULT_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, BACKUP_DIR,
+  setDataLocation, clearDataLocation,
 } = require('./paths');
 const { isFinishedByPosition } = require('./finished');
 
@@ -378,6 +380,118 @@ async function restoreBackup() {
   });
 }
 
+/** Files/folders this app actually owns under DATA_ROOT — deliberately not `userData` (Chromium's own profile/cache), which stays behind and is safe to lose: it only holds renderer localStorage (theme, sort, etc.), not library data, and moving it while its own process still has it open is asking for trouble. */
+function ownDataEntries() {
+  return [LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE, METADATA_FILE, COVER_CACHE, ONLINE_COVER_CACHE]
+    .filter((p) => fs.existsSync(p));
+}
+
+/** Move one entry, falling back to copy+delete across drives where rename() can't work atomically. */
+async function moveEntry(src, dest) {
+  try {
+    await fsp.rename(src, dest);
+  } catch (err) {
+    if (err.code !== 'EXDEV') throw err;
+    await fsp.cp(src, dest, { recursive: true });
+    await fsp.rm(src, { recursive: true, force: true });
+  }
+}
+
+/**
+ * File > Change library location… Lets any user move off the default
+ * %APPDATA% location (e.g. onto a drive with more room) without needing an
+ * environment variable — this is also the supported way to point the app at
+ * an existing data folder (e.g. one shared between machines or restored from
+ * elsewhere), which is why the two cases below behave differently.
+ */
+async function changeDataLocation() {
+  if (!mainWindow) return;
+  if (scanning) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      message: 'Wait for the current scan to finish first.',
+    });
+    return;
+  }
+
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a folder for your Midnight Athenaeum data',
+    defaultPath: path.dirname(DATA_ROOT),
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (canceled || !filePaths.length) return;
+
+  const target = filePaths[0];
+  if (path.resolve(target) === path.resolve(DATA_ROOT)) return;
+
+  const hasExistingData = fs.existsSync(path.join(target, 'library.json'));
+
+  const { response } = hasExistingData
+    ? await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['Cancel', 'Use this folder'],
+      defaultId: 1,
+      cancelId: 0,
+      message: 'Use the existing Midnight Athenaeum data found here?',
+      detail: `${target}\n\nalready has a library. Midnight Athenaeum will switch to it and `
+        + 'restart. Your current data stays exactly where it is, untouched — it just stops '
+        + 'being the active one.',
+    })
+    : await dialog.showMessageBox(mainWindow, {
+      type: 'warning',
+      buttons: ['Cancel', 'Move my data here'],
+      defaultId: 1,
+      cancelId: 0,
+      message: 'Move your Midnight Athenaeum data to this folder?',
+      detail: `Your library index, progress, bookmarks, and cached covers will move from:\n${DATA_ROOT}\n\n`
+        + `to:\n${target}\n\nMidnight Athenaeum will restart once the move is done.`,
+    });
+  if (response !== 1) return;
+
+  if (!hasExistingData) {
+    libraryStore.flushSync();
+    progressStore.flushSync();
+    bookmarksStore.flushSync();
+    normalizationStore.flushSync();
+    metadataStore.flushSync();
+    try {
+      await fsp.mkdir(target, { recursive: true });
+      for (const src of ownDataEntries()) {
+        await moveEntry(src, path.join(target, path.basename(src)));
+      }
+    } catch (err) {
+      dialog.showErrorBox('Move failed', `Could not move your data to the new location:\n${err.message}`);
+      return;
+    }
+  }
+
+  setDataLocation(target);
+  app.relaunch();
+  app.exit(0);
+}
+
+/** File > Reset library location to default — back to %APPDATA%, undoing changeDataLocation(). */
+async function resetDataLocation() {
+  if (!mainWindow) return;
+  if (path.resolve(DATA_ROOT) === path.resolve(OS_DEFAULT_ROOT)) {
+    dialog.showMessageBox(mainWindow, { type: 'info', message: 'Already using the default location.' });
+    return;
+  }
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['Cancel', 'Reset'],
+    defaultId: 1,
+    cancelId: 0,
+    message: 'Reset library location to the default?',
+    detail: `Midnight Athenaeum will restart and look for its data at the standard location `
+      + `instead of:\n${DATA_ROOT}\n\nNothing at the current location is moved or deleted.`,
+  });
+  if (response !== 1) return;
+  clearDataLocation();
+  app.relaunch();
+  app.exit(0);
+}
+
 /**
  * Replace Electron's default menu (Reload, DevTools, Zoom, sample Help links…)
  * with a small app-focused one. Edit is kept so copy/paste works in the search
@@ -392,6 +506,9 @@ function buildMenu() {
         { type: 'separator' },
         { label: 'Backup data…', click: () => createBackup() },
         { label: 'Restore from backup…', click: () => restoreBackup() },
+        { type: 'separator' },
+        { label: 'Change library location…', click: () => changeDataLocation() },
+        { label: 'Reset library location to default', click: () => resetDataLocation() },
         { type: 'separator' },
         { role: 'quit' },
       ],

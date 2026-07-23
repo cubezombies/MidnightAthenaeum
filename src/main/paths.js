@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('node:fs');
 const path = require('node:path');
 const { app } = require('electron');
 
@@ -10,10 +11,46 @@ const { app } = require('electron');
 // but that must never be the *default* baked into the shipped app: it's this
 // machine's convention, not a real user's, and a plain install can't assume
 // a D: drive even exists.
-const DATA_ROOT = process.env.MIDNIGHT_ATHENAEUM_DATA_ROOT || path.join(app.getPath('appData'), 'Midnight Athenaeum');
+const OS_DEFAULT_ROOT = path.join(app.getPath('appData'), 'Midnight Athenaeum');
+
+// A user-chosen data location (File > Change library location…) is recorded
+// here — deliberately *always* at the OS default, never at the location it
+// points to, so there's one fixed place to find "where did the user put
+// their data" no matter where that turns out to be. This is what
+// changeDataLocation() in main.js writes.
+const LOCATION_FILE = path.join(OS_DEFAULT_ROOT, 'location.json');
+
+function readPersistedLocation() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(LOCATION_FILE, 'utf8'));
+    return typeof parsed.dataRoot === 'string' && parsed.dataRoot ? parsed.dataRoot : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Persist a user-chosen data location. Takes effect on next launch — paths below are computed once at startup. */
+function setDataLocation(newRoot) {
+  fs.mkdirSync(path.dirname(LOCATION_FILE), { recursive: true });
+  fs.writeFileSync(LOCATION_FILE, JSON.stringify({ dataRoot: newRoot }, null, 2), 'utf8');
+}
+
+/** Back to the OS default — used if the user picks "Reset to default location". */
+function clearDataLocation() {
+  try {
+    fs.rmSync(LOCATION_FILE, { force: true });
+  } catch {
+    // Best effort — worst case the old override just gets picked up again next launch.
+  }
+}
+
+const DATA_ROOT = process.env.MIDNIGHT_ATHENAEUM_DATA_ROOT || readPersistedLocation() || OS_DEFAULT_ROOT;
 
 module.exports = {
   DATA_ROOT,
+  OS_DEFAULT_ROOT,
+  setDataLocation,
+  clearDataLocation,
   USER_DATA: path.join(DATA_ROOT, 'userData'),
   COVER_CACHE: path.join(DATA_ROOT, 'covers'),
   // Covers fetched from the online metadata lookup, kept separate from
