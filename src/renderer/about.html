@@ -2,42 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self';" />
   <title>About Midnight Athenaeum</title>
-  <style>
-    :root {
-      --bg: #12121a; --text: #ececf2; --muted: #9a9ab0; --accent: #7c6cf5; --line: #2e2e3d;
-    }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; }
-    body {
-      background: var(--bg); color: var(--text);
-      font: 14px/1.55 "Segoe UI", system-ui, sans-serif;
-      display: flex; flex-direction: column; align-items: center;
-      text-align: center; padding: 22px 26px 26px;
-      -webkit-user-select: none; user-select: none;
-    }
-    .logo {
-      width: 100%; max-width: 440px; border-radius: 12px;
-      border: 1px solid var(--line); display: block;
-    }
-    .heading {
-      margin: 16px 0 0; font-size: 22px; font-weight: 600;
-      letter-spacing: 0.02em; color: var(--text);
-    }
-    .version { margin-top: 8px; color: var(--muted); font-size: 13px; }
-    .version b { color: var(--text); font-weight: 600; }
-    .tagline { margin-top: 12px; color: var(--muted); max-width: 400px; }
-    .links { margin-top: 18px; display: flex; gap: 10px; }
-    a.btn, button.btn {
-      background: #1b1b26; border: 1px solid var(--line); color: var(--text);
-      padding: 7px 14px; border-radius: 8px; cursor: pointer; font-size: 13px;
-      text-decoration: none;
-    }
-    a.btn:hover, button.btn:hover { background: #2b2b3a; }
-    .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-    .btn.primary:hover { background: #6b59f0; }
-    .copyright { margin-top: 16px; color: #6a6a80; font-size: 11px; }
-  </style>
+  <link rel="stylesheet" href="about.css" />
 </head>
 <body>
   <img class="logo" src="../../assets/logo.png" alt="Midnight Athenaeum" />
@@ -57,11 +25,6 @@
 
   <div class="copyright">Built with Electron · open until midnight</div>
 
-  <script>
-    document.getElementById('version').textContent =
-      new URLSearchParams(location.search).get('v') || '0.1.0';
-    document.getElementById('closeBtn').addEventListener('click', () => window.close());
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.close(); });
-  </script>
+  <script src="about-init.js"></script>
 </body>
 </html>

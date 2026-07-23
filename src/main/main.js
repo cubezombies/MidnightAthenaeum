@@ -9,6 +9,7 @@ const {
   USER_DATA, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
   METADATA_FILE, DATA_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, BACKUP_DIR,
 } = require('./paths');
+const { isFinishedByPosition } = require('./finished');
 
 app.setName('Midnight Athenaeum');
 // Matches build.appId in package.json — keeps the taskbar jump list, thumbbar
@@ -68,8 +69,26 @@ function sendMediaControl(action) {
   mainWindow?.webContents.send('media:control', action);
 }
 
+/**
+ * Minimal id/title/author list for the jump list — deliberately not
+ * `currentState().books`, which runs every book through `toClientBook`
+ * (per-track mapping, mediaUrl encoding, cover resolution) plus
+ * `folderBookCounts` just to feed a list that only ever shows the 8 most
+ * recently played books. This is called on every progress save (every few
+ * seconds during playback), so it needs to stay cheap regardless of library
+ * size — `taskbar.updateJumpList` itself already skips the actual Shell call
+ * when the top-8 order hasn't changed.
+ */
+function jumpListBooks() {
+  const overrides = metadataStore.get();
+  return libraryStore.get().books.map((b) => {
+    const o = overrides[b.id];
+    return { id: b.id, title: o?.title || b.title, author: o?.author || b.author };
+  });
+}
+
 function refreshJumpList() {
-  taskbar.updateJumpList(currentState().books, progressStore.get());
+  taskbar.updateJumpList(jumpListBooks(), progressStore.get());
 }
 
 function getAllowedRoots() {
@@ -487,6 +506,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('library:removeFolder', (_event, folder) => {
+    if (typeof folder !== 'string' || !folder) return currentState();
     const state = libraryStore.get();
     const folders = state.folders.filter((f) => f !== folder);
     const books = state.books.filter((b) => folders.some((f) => isUnderFolder(b.sourceDir, f)));
@@ -502,7 +522,7 @@ function registerIpc() {
     progress[bookId] = {
       position,
       duration: duration ?? progress[bookId]?.duration ?? 0,
-      finished: duration ? position >= duration - 30 : false,
+      finished: isFinishedByPosition(position, duration),
       // A manual finished/unfinished mark (below) must survive routine
       // playback saves, which happen every few seconds — carry it forward
       // rather than letting it get silently overwritten mid-listen.
@@ -576,7 +596,8 @@ function registerIpc() {
     return map;
   });
 
-  ipcMain.handle('bookmarks:update', (_event, { bookId, id, label, note }) => {
+  ipcMain.handle('bookmarks:update', (_event, { bookId, id, label, note } = {}) => {
+    if (typeof bookId !== 'string' || typeof id !== 'string') return bookmarksStore.get();
     const map = { ...bookmarksStore.get() };
     const list = map[bookId];
     if (!list) return map;
@@ -594,7 +615,8 @@ function registerIpc() {
     return map;
   });
 
-  ipcMain.handle('bookmarks:remove', (_event, { bookId, id }) => {
+  ipcMain.handle('bookmarks:remove', (_event, { bookId, id } = {}) => {
+    if (typeof bookId !== 'string' || typeof id !== 'string') return bookmarksStore.get();
     const map = { ...bookmarksStore.get() };
     if (map[bookId]) {
       map[bookId] = map[bookId].filter((b) => b.id !== id);
@@ -634,20 +656,36 @@ function registerIpc() {
   ipcMain.handle('updates:check', () => updater.checkForUpdates());
   ipcMain.handle('updates:install', () => updater.quitAndInstall());
 
-  ipcMain.handle('metadata:search', async (_event, query) => searchOpenLibrary(query));
+  ipcMain.handle('metadata:search', async (_event, query) => {
+    if (typeof query !== 'string') return { ok: false, error: 'Invalid search query.' };
+    return searchOpenLibrary(query);
+  });
 
   // Full description for one picked candidate — fetched only when the user
   // selects a search result, not for every row in the results list.
-  ipcMain.handle('metadata:preview', async (_event, key) => fetchWorkDescription(key));
+  ipcMain.handle('metadata:preview', async (_event, key) => {
+    if (typeof key !== 'string') return { ok: true, description: '' };
+    return fetchWorkDescription(key);
+  });
+
+  /** The single client-shaped book, for handlers that only changed one. */
+  function clientBookById(bookId) {
+    const raw = libraryStore.get().books.find((b) => b.id === bookId);
+    return raw ? toClientBook(raw) : null;
+  }
 
   /**
    * Apply a picked candidate as this book's override. The cover is downloaded
    * before the override record is written, so a book is never left pointing at
    * a cover file that doesn't exist yet.
+   *
+   * Returns just the one changed book rather than `currentState()` — only its
+   * title/author/description/cover could have changed, so there's no reason to
+   * re-map and re-transmit the whole library over IPC for this.
    */
   ipcMain.handle('metadata:apply', async (_event, payload) => {
     const { bookId, title, author, description, coverId, source, sourceKey } = payload ?? {};
-    if (typeof bookId !== 'string' || !bookId) return currentState();
+    if (typeof bookId !== 'string' || !bookId) return { book: null };
 
     let hasCover = false;
     if (coverId) {
@@ -667,12 +705,15 @@ function registerIpc() {
     };
     metadataStore.set(map);
     refreshJumpList(); // title/author may have just changed
-    return currentState();
+    return { book: clientBookById(bookId) };
   });
 
-  /** Revert a book to its scanned file tags, dropping the online override. */
+  /**
+   * Revert a book to its scanned file tags, dropping the online override.
+   * Same single-book-response reasoning as metadata:apply above.
+   */
   ipcMain.handle('metadata:clear', (_event, bookId) => {
-    if (typeof bookId !== 'string') return currentState();
+    if (typeof bookId !== 'string') return { book: null };
     const map = { ...metadataStore.get() };
     if (map[bookId]) {
       delete map[bookId];
@@ -685,7 +726,7 @@ function registerIpc() {
       }
       refreshJumpList();
     }
-    return currentState();
+    return { book: clientBookById(bookId) };
   });
 
   // One-shot: consumed by the renderer on bootstrap so a jump-list launch

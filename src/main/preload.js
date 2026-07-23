@@ -1,8 +1,13 @@
 'use strict';
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { isFinishedByPosition } = require('./finished');
 
 contextBridge.exposeInMainWorld('api', {
+  // Pure/sync — lets the renderer compute the same "finished" value main.js
+  // will persist, without duplicating the threshold constant on both sides.
+  isFinishedByPosition,
+
   getState: () => ipcRenderer.invoke('library:getState'),
   addFolder: () => ipcRenderer.invoke('library:addFolder'),
   addFolderPaths: (paths) => ipcRenderer.invoke('library:addFolderPaths', paths),

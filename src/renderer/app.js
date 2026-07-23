@@ -107,6 +107,7 @@ const state = {
   bookReturnsToSeries: null, // where the book view's back button should return
   pausedAt: 0,         // timestamp of the last pause, for resume auto-rewind
   displayItems: [],    // grid items (book cards and series tiles) after filtering
+  seriesByKey: new Map(), // group.key -> group, for the grid's delegated click handler
   filtered: [],        // books matching the current search
   gridShown: 0,        // how many cards are currently in the DOM
   userVolume: 1,       // volume the user set; audio volume = this * sleep fade
@@ -182,9 +183,12 @@ const seriesKeyFor = (series, author) => `${seriesNorm(series)}::${seriesNorm(au
  * everything else stays an individual `book` card. Order is otherwise preserved.
  */
 function buildDisplayItems(books) {
+  // parseSeries runs regex matching against every title; computed once per
+  // book here and reused below, instead of parsing the same title twice.
+  const parsed = books.map((b) => ({ book: b, p: parseSeries(b.title) }));
+
   const groups = new Map();
-  for (const b of books) {
-    const p = parseSeries(b.title);
+  for (const { book: b, p } of parsed) {
     if (!p) continue;
     const key = seriesKeyFor(p.series, b.author);
     if (!groups.has(key)) groups.set(key, { key, name: p.series, author: b.author, volumes: [] });
@@ -194,8 +198,7 @@ function buildDisplayItems(books) {
 
   const items = [];
   const emitted = new Set();
-  for (const b of books) {
-    const p = parseSeries(b.title);
+  for (const { book: b, p } of parsed) {
     const key = p ? seriesKeyFor(p.series, b.author) : null;
     if (key && realSeries.has(key)) {
       if (!emitted.has(key)) {
@@ -272,7 +275,7 @@ function formatDurationLong(seconds) {
 
 const GRID_PAGE = 120;
 
-function buildCard(book, { badge } = {}) {
+function buildCard(book, { badge, delegate } = {}) {
   const saved = state.progress[book.id];
   // A finished book always reads as a full bar, even if it was marked finished
   // manually (e.g. "finished elsewhere") with little or no listening position
@@ -331,10 +334,18 @@ function buildCard(book, { badge } = {}) {
   author.textContent = book.author;
 
   card.append(art, title, author);
-  card.addEventListener('click', () => openBook(book.id));
-  card.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBook(book.id); }
-  });
+  card.dataset.bookId = book.id;
+  // The main grid can hold thousands of these; it wires one delegated pair of
+  // listeners instead (see the el.grid listeners below `appendGridPage`) and
+  // opts out here via `delegate`. The continue-listening shelf and series view
+  // stay small (bounded to 15 / one series), so per-card listeners there are
+  // fine as-is.
+  if (!delegate) {
+    card.addEventListener('click', () => openBook(book.id));
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBook(book.id); }
+    });
+  }
   return card;
 }
 
@@ -445,9 +456,13 @@ async function removeFolder(folder, bookCount) {
     : `Remove this folder from your library?\n\n${folder}`;
   if (!window.confirm(msg)) return;
 
-  const next = await window.api.removeFolder(folder);
-  applyState(next);
-  renderFoldersMenu();
+  try {
+    const next = await window.api.removeFolder(folder);
+    applyState(next);
+    renderFoldersMenu();
+  } catch (err) {
+    reportFolderError('remove that folder', err);
+  }
 }
 
 function openFoldersMenu(open) {
@@ -483,7 +498,7 @@ function renderContinueShelf() {
 }
 
 /** A tile standing in for a whole series; opens the series view on click. */
-function buildSeriesTile(group) {
+function buildSeriesTile(group, { delegate } = {}) {
   const first = group.volumes.find((v) => v.book.coverUrl) ?? group.volumes[0];
 
   const card = document.createElement('div');
@@ -531,10 +546,13 @@ function buildSeriesTile(group) {
   author.textContent = group.author;
 
   card.append(art, title, author);
-  card.addEventListener('click', () => openSeries(group));
-  card.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSeries(group); }
-  });
+  card.dataset.seriesKey = group.key;
+  if (!delegate) {
+    card.addEventListener('click', () => openSeries(group));
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSeries(group); }
+    });
+  }
   return card;
 }
 
@@ -557,6 +575,12 @@ function renderGrid() {
     ? buildDisplayItems(state.filtered)
     : state.filtered.map((book) => ({ type: 'book', book }));
 
+  // Looked up by the grid's delegated click/keydown handler (below), since
+  // series cards there carry only a data-series-key, not the group object.
+  state.seriesByKey = new Map(
+    state.displayItems.filter((i) => i.type === 'series').map((i) => [i.series.key, i.series]),
+  );
+
   const seriesCount = state.displayItems.filter((i) => i.type === 'series').length;
 
   el.emptyState.classList.toggle('hidden', state.books.length > 0);
@@ -577,7 +601,9 @@ function appendGridPage() {
   const frag = document.createDocumentFragment();
   for (let i = state.gridShown; i < end; i += 1) {
     const item = items[i];
-    frag.append(item.type === 'series' ? buildSeriesTile(item.series) : buildCard(item.book));
+    frag.append(item.type === 'series'
+      ? buildSeriesTile(item.series, { delegate: true })
+      : buildCard(item.book, { delegate: true }));
   }
   el.grid.append(frag);
   state.gridShown = end;
@@ -596,6 +622,33 @@ function appendGridPage() {
     gridObserver.observe(sentinel);
   }
 }
+
+/**
+ * One delegated click/keydown pair for the whole main grid, instead of a
+ * listener per card — el.grid's own children get replaced on every
+ * renderGrid(), but the container itself (and these listeners) persist for
+ * the app's lifetime, so listener count stays flat no matter how many
+ * thousands of cards have scrolled through.
+ */
+function activateGridCard(card) {
+  if (card.dataset.seriesKey) {
+    const group = state.seriesByKey.get(card.dataset.seriesKey);
+    if (group) openSeries(group);
+    return;
+  }
+  if (card.dataset.bookId) openBook(card.dataset.bookId);
+}
+el.grid.addEventListener('click', (e) => {
+  const card = e.target.closest('.card');
+  if (card && el.grid.contains(card)) activateGridCard(card);
+});
+el.grid.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const card = e.target.closest('.card');
+  if (!card || !el.grid.contains(card)) return;
+  e.preventDefault();
+  activateGridCard(card);
+});
 
 /* ---------------- series view ---------------- */
 
@@ -1174,6 +1227,15 @@ function audioTick() {
     silenceSince = 0;
     return;
   }
+
+  // Nothing needs a fresh sample: skip-silence is off (and not mid-boost, so
+  // no snap-back to apply), and normalization is either off or already locked
+  // onto a gain. Skip the analyser read + RMS/peak loop entirely rather than
+  // doing it unconditionally on every 25ms tick.
+  const m = state.norm;
+  const measuring = state.normalize && m && !m.locked;
+  if (!state.skipSilence && !state.silenceBoosting && !measuring) return;
+
   const { rms, peak } = currentLevel();
 
   // --- skip silence ---
@@ -1191,8 +1253,7 @@ function audioTick() {
   }
 
   // --- loudness measurement ---
-  const m = state.norm;
-  if (state.normalize && m && !m.locked && rms > NORM_GATE_RMS) {
+  if (measuring && rms > NORM_GATE_RMS) {
     m.sumMS += rms * rms;
     m.count += 1;
     if (peak > m.peak) m.peak = peak;
@@ -1349,7 +1410,7 @@ function flushProgress() {
     ...state.progress[book.id],
     position,
     duration,
-    finished: duration ? position >= duration - 30 : false,
+    finished: window.api.isFinishedByPosition(position, duration),
     speed,
     updatedAt: Date.now(),
   };
@@ -1602,7 +1663,13 @@ el.speed.addEventListener('change', () => { applySpeed(Number(el.speed.value)); 
 el.volume.addEventListener('input', () => { state.userVolume = Number(el.volume.value); applyVolume(); });
 
 el.backBtn.addEventListener('click', goBack);
-el.search.addEventListener('input', renderLibrary);
+// Debounced: renderLibrary re-filters/sorts/groups the whole library, which
+// on a large one is too expensive to re-run synchronously on every keystroke.
+let searchDebounceTimer = null;
+el.search.addEventListener('input', () => {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(renderLibrary, 150);
+});
 
 el.chapterSearch.addEventListener('input', () => { if (state.current) renderChapters(state.current); });
 el.chapterSearch.addEventListener('keydown', (e) => {
@@ -1648,9 +1715,20 @@ el.filterTabs.addEventListener('click', (e) => {
   renderLibrary();
 });
 
-el.addFolderBtn.addEventListener('click', () => window.api.addFolder().then((next) => { applyState(next); renderFoldersMenu(); }));
-el.emptyAddBtn.addEventListener('click', () => window.api.addFolder().then(applyState));
-el.rescanBtn.addEventListener('click', () => window.api.rescan().then(applyState));
+function reportFolderError(action, err) {
+  console.error(`[folders] ${action} failed:`, err);
+  showToast(`Could not ${action} — try again.`);
+}
+
+el.addFolderBtn.addEventListener('click', () => window.api.addFolder()
+  .then((next) => { applyState(next); renderFoldersMenu(); })
+  .catch((err) => reportFolderError('add that folder', err)));
+el.emptyAddBtn.addEventListener('click', () => window.api.addFolder()
+  .then(applyState)
+  .catch((err) => reportFolderError('add that folder', err)));
+el.rescanBtn.addEventListener('click', () => window.api.rescan()
+  .then(applyState)
+  .catch((err) => reportFolderError('rescan the library', err)));
 
 /** Undo side of "Reset progress": puts the exact prior position/speed back. */
 async function restoreProgress(book, previous) {
@@ -1866,7 +1944,7 @@ el.metadataApplyBtn.addEventListener('click', async () => {
       source: 'openlibrary',
       sourceKey: candidate.key,
     });
-    applyState(next);
+    patchBook(next.book);
     closeMetadataModal();
     showToast(`Applied "${candidate.title}" from Open Library.`);
   } finally {
@@ -1878,7 +1956,7 @@ el.metadataApplyBtn.addEventListener('click', async () => {
 el.metadataRevertBtn.addEventListener('click', async () => {
   if (!state.current) return;
   const next = await window.api.clearMetadata(state.current.id);
-  applyState(next);
+  patchBook(next.book);
   showToast('Reverted to the file\'s own tags.');
 });
 
@@ -2076,6 +2154,30 @@ function applyState(next) {
     } else {
       showLibrary();
     }
+  }
+  renderLibrary();
+}
+
+/**
+ * Patch a single book in place (metadata:apply / metadata:clear only ever
+ * change one book's title/author/description/cover) instead of going through
+ * applyState's full-library replace — those two IPC calls now return just
+ * `{ book }` rather than the whole currentState(), so there's no full array
+ * to diff against here either.
+ */
+function patchBook(book) {
+  if (!book) return;
+  const idx = state.books.findIndex((b) => b.id === book.id);
+  if (idx === -1) return;
+  state.books[idx] = book;
+
+  if (state.current?.id === book.id) {
+    state.current = book;
+    renderBookHeader(book);
+    renderChapters(book);
+    renderBookmarks(book);
+    updateFinishedButton(book);
+    updateMetadataUI(book);
   }
   renderLibrary();
 }

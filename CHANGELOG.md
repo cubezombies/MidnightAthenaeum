@@ -8,6 +8,37 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-07-22
+### Fixed
+- The "Continue Listening" jump list refresh (which runs every few seconds
+  during playback) no longer re-maps and re-serializes the entire library on
+  every call — it now builds a lightweight id/title/author list instead of
+  running every book through the full client-shaping the main library view
+  needs.
+- Applying or reverting an online metadata correction no longer re-sends the
+  whole library over IPC, just the one changed book.
+- Library search is now debounced instead of re-filtering, re-sorting, and
+  re-grouping the whole library on every keystroke.
+- A full library scan no longer blocks on a synchronous directory read per
+  book when checking for a sibling `.cue` file.
+- The skip-silence/normalization audio loop skips its per-tick sample read
+  once normalization has locked its gain and skip-silence is off, instead of
+  reading it unconditionally every 25ms.
+- The main library grid's cards now share one delegated click/keydown
+  listener instead of attaching a pair to every card.
+- The "finished" position threshold was duplicated between the main and
+  renderer processes; it's now a single shared constant so the two can't
+  silently drift apart.
+- A tag-parse failure during a scan is now aggregated and reported as a
+  scan-level warning instead of being silently discarded.
+- Several IPC handlers (`library:removeFolder`, `bookmarks:update`/`remove`,
+  `metadata:search`/`preview`) now validate their arguments like the rest of
+  the IPC surface, and a failed folder add/rescan/remove now shows a toast
+  instead of failing silently.
+- The About window now carries the same Content-Security-Policy as the main
+  window (its inline style/script were split into external files to allow
+  it).
+
 ## [0.4.1] - 2026-07-22
 ### Changed
 - Real branding art for Midnight Athenaeum (previous release still carried

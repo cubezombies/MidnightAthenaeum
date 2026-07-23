@@ -58,7 +58,7 @@ Already shipped, so it is not repeated in the lists below:
   published to GitHub Releases by CI on every version tag. **Help → Check for
   Updates…** checks Releases manually (never automatic), auto-downloads a
   newer version in the background, and shows its change notes pulled from
-  `CHANGELOG.md`. Shipped 2026-07-22.
+  `CHANGELOG.md` (Tier 1 #18, shipped). Shipped 2026-07-22.
 - **Windows SMTC + taskbar integration** — the media flyout, lock screen, and
   hardware/keyboard media keys via `navigator.mediaSession`; taskbar
   thumbnail-toolbar buttons (prev/play-pause/next chapter); a jump list of
@@ -280,6 +280,20 @@ series-tile aggregation, and confirmed live on screen (not just via computed
 style, which returns empty strings for a detached element) that the volume-#
 badge and the NEW badge render on opposite corners of the same card without
 overlapping.
+
+### 18. Installer + in-app updates — **shipped** ✅
+An NSIS installer/uninstaller (`electron-builder`, standard per-user default
+location, desktop + Start Menu shortcuts) built and published to GitHub
+Releases by CI on every version tag. **Help → Check for Updates…** checks
+Releases manually — never automatic, never on launch — auto-downloads a
+newer version in the background, and shows its change notes pulled straight
+from `CHANGELOG.md` (`scripts/extract-changelog.cjs`). Restarting to install
+runs `quitAndInstall()` silently (no interactive wizard) and relaunches the
+app automatically once done.
+*Still possible:* an optional "check on launch" setting for users who'd
+rather not remember to check manually, and a macOS `dmg` build once that
+port exists (`electron-builder`'s config already separates `win`/`mac`
+targets, so this is additive, not a rewrite).
 
 ---
 

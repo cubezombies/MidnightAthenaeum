@@ -178,7 +178,7 @@ async function buildSingleFileBook(unit, stats, id) {
   }));
 
   // Fall back to a sibling .cue when the file has no embedded chapters.
-  if (chapters.length <= 1 && hasSiblingCue(filePath)) {
+  if (chapters.length <= 1 && await hasSiblingCue(filePath)) {
     const cueChapters = await chaptersFromCue(filePath, duration);
     if (cueChapters.length > 1) chapters = cueChapters;
   }
@@ -200,6 +200,11 @@ async function buildSingleFileBook(unit, stats, id) {
     chapters,
     tracks: [{ filePath, duration, title: chapters.length ? null : titleFromFileName(unit.name) }],
     signature: unitSignature(stats),
+    // Surfaces readTags()'s failure flag at the book level (previously computed
+    // and then discarded) so a scan can report how many books it couldn't
+    // actually read tags for, instead of that only being visible per-file in
+    // the console warning.
+    tagsFailed: Boolean(tags.failed),
   };
 }
 
@@ -230,7 +235,7 @@ async function buildMultiTrackBook(unit, stats, id) {
   let chapterList = chapters;
   // A lone audio file (e.g. one big .mp3) is just one "chapter"; if it ships a
   // sibling .cue, use that to give it real chapters.
-  if (tracks.length === 1 && hasSiblingCue(tracks[0].filePath)) {
+  if (tracks.length === 1 && await hasSiblingCue(tracks[0].filePath)) {
     const cueChapters = await chaptersFromCue(tracks[0].filePath, elapsed);
     if (cueChapters.length > 1) chapterList = cueChapters;
   }
@@ -254,6 +259,7 @@ async function buildMultiTrackBook(unit, stats, id) {
     chapters: chapterList,
     tracks,
     signature: unitSignature(stats),
+    tagsFailed: parsed.some((p) => p.tags.failed),
   };
 }
 
@@ -355,6 +361,12 @@ async function scanLibrary(folders, cachedBooks = [], onProgress) {
 
   const books = built.filter(Boolean);
   books.sort((a, b) => a.author.localeCompare(b.author) || a.title.localeCompare(b.title));
+
+  const failedCount = books.reduce((n, b) => n + (b.tagsFailed ? 1 : 0), 0);
+  if (failedCount) {
+    console.warn(`[library] ${failedCount} book(s) had tag-parse failures — see warnings above for which files.`);
+  }
+
   return books;
 }
 

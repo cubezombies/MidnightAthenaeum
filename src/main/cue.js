@@ -19,7 +19,6 @@
  * for navigation; only MM:SS matter.
  */
 
-const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
@@ -112,11 +111,18 @@ async function chaptersFromCue(audioPath, duration) {
   }));
 }
 
-/** Sync existence check for a sibling cue (cheap pre-filter). */
-function hasSiblingCue(audioPath) {
+/**
+ * Cheap existence check for a sibling cue (pre-filter before the fuller parse
+ * in chaptersFromCue). Async — this runs once per single-file book inside the
+ * scan's concurrent mapLimit, and a sync readdir there would block the whole
+ * event loop on every call rather than actually overlapping with the other
+ * in-flight book reads.
+ */
+async function hasSiblingCue(audioPath) {
   const dir = path.dirname(audioPath);
   try {
-    return fs.readdirSync(dir).some((n) => n.toLowerCase().endsWith('.cue'));
+    const entries = await fsp.readdir(dir);
+    return entries.some((n) => n.toLowerCase().endsWith('.cue'));
   } catch {
     return false;
   }
