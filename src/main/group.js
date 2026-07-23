@@ -16,8 +16,15 @@ const path = require('node:path');
 
 const SELF_CONTAINED = new Set(['.m4b', '.m4a']);
 
-// "Disc 2", "CD03", "Part 4", "Disk 1 Disk 1" …
-const DISC_DIR = /^(disc|disk|cd|part|pt)[\s._-]*\d+/i;
+// "Disc 2", "CD03", "Part 4", "Disk 1 Disk 1", "(Disc 2)" …
+const DISC_DIR = /^\(?(disc|disk|cd|part|pt)[\s._-]*\d+/i;
+// "(01of17)", "01 of 17", "1of7)" — an old CD-rip convention: one folder per
+// physical disc, named purely as its position in the set with no "disc"/"cd"
+// word at all. Found in a real multi-hundred-track book in this library that
+// DISC_DIR didn't catch (17 folders, each its own "book" in the grid instead
+// of one merged book) — a distinct enough shape from "Disc N" to need its
+// own pattern rather than a tweak to DISC_DIR.
+const PART_OF_TOTAL_DIR = /^\(?\d+\s*of\s*\d+\)?$/i;
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
@@ -34,7 +41,8 @@ function stripDiscSuffix(name) {
 }
 
 function looksLikeDisc(dirName) {
-  return DISC_DIR.test(dirName) || /\b(disc|disk|cd)[\s._-]*\d+\b/i.test(dirName);
+  const name = dirName.trim();
+  return DISC_DIR.test(name) || /\b(disc|disk|cd)[\s._-]*\d+\b/i.test(name) || PART_OF_TOTAL_DIR.test(name);
 }
 
 /**

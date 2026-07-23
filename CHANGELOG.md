@@ -8,6 +8,24 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-22
+### Fixed
+- Multi-part books using a "(01of17)"-style folder-per-disc naming
+  convention (one folder per physical CD, no "Disc"/"CD" word in the name)
+  showed up as N separate library entries instead of one merged book. Found
+  on a real 330-track, 17-folder audiobook in this library — the existing
+  disc-folder merge heuristic only recognized "Disc N"/"CD N"/"Part N"
+  naming, not bare "N of M". **Needs a rescan** to re-group books that were
+  already scanned under the old logic.
+- The play button and the skip-silence button could visually overlap at
+  some window widths. Cause: `.extras`' `min-width: 0` (added when making
+  the player controls responsive) let its grid track shrink smaller than
+  its actual content — but unlike the now-playing text (which genuinely
+  shrinks via ellipsis), `.extras`' buttons/selects/slider have fixed sizes
+  that can't shrink to match, so the content overflowed into the play
+  button instead. Removed the incorrect `min-width: 0` and widened the
+  responsive breakpoints for more headroom.
+
 ## [0.5.0] - 2026-07-22
 ### Added
 - **Local, offline transcription and full-text search inside audiobooks.**

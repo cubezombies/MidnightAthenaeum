@@ -505,23 +505,27 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .play-btn:hover { background: var(--accent-hover); }
 
-.extras { display: flex; align-items: center; gap: 18px; justify-self: end; min-width: 0; }
+/* No min-width: 0 here on purpose — unlike .now-playing (whose text
+   genuinely shrinks via ellipsis), .extras' children are buttons/selects/a
+   slider with fixed intrinsic sizes that can't shrink to match. Letting the
+   grid track go smaller than that content doesn't make the content smaller,
+   it just makes it overflow its own box — which visually spilled left into
+   the play button (a real bug this fixed, found via real-world testing).
+   The grid's default content-aware track minimum keeps that structurally
+   impossible; the media queries below reduce the actual content size
+   instead, with real headroom before the app's 940px minimum width. */
+.extras { display: flex; align-items: center; gap: 18px; justify-self: end; }
 .extra { display: flex; align-items: center; gap: 7px; }
 .extra-label { color: var(--muted); font-size: 12px; }
 #volume { width: 84px; }
 
-/* The player packs 7 controls into .extras — near the app's 940px minimum
-   window width there isn't room for full-width gaps, labels, and a wide
-   volume slider all at once. Compact progressively rather than letting
-   anything overflow or wrap (the player's height is a fixed CSS var used
-   elsewhere, so wrapping to a second line would break that assumption). */
-@media (max-width: 1150px) {
+@media (max-width: 1300px) {
   .extras { gap: 10px; }
   .now-playing { gap: 8px; }
   #volume { width: 56px; }
 }
-@media (max-width: 1040px) {
-  .extra-label { display: none; }
+@media (max-width: 1150px) {
+  .extra-label, .sleep-label { display: none; }
   .now-title, .now-chapter { max-width: 140px; }
 }
 
