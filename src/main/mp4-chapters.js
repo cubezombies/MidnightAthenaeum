@@ -286,23 +286,53 @@ async function readMovieDuration(reader, moov) {
 }
 
 /**
- * Read chapters and duration in a single pass.
- * Duration comes from `mvhd` so it still works on files music-metadata rejects.
- *
- * @returns {Promise<{chapters: Array<{title:string,start:number}>, duration: number}>}
+ * Opens `filePath`, locates the top-level `moov` box, and hands both to `fn`
+ * — the one piece of work every reader below needs regardless of how much
+ * of the file it goes on to touch. Locating `moov` is a cheap box-header
+ * walk (small fixed reads) even on a huge file; what happens after varies
+ * wildly in cost, which is exactly why duration and chapters are split into
+ * separate entry points rather than one `readMp4Info` that always pays for
+ * both.
  */
-async function readMp4Info(filePath) {
+async function withMoov(filePath, fn) {
   let fh;
   try {
     fh = await open(filePath, 'r');
     const { size } = await fh.stat();
     const reader = new BoxReader(fh, size);
-
     const top = await reader.children(0, size);
     const moov = top.find((b) => b.type === 'moov');
-    if (!moov) return { chapters: [], duration: 0 };
+    return moov ? await fn(reader, moov) : null;
+  } catch (err) {
+    console.warn(`[chapters] ${filePath}: ${err.message}`);
+    return null;
+  } finally {
+    await fh?.close();
+  }
+}
 
-    const duration = await readMovieDuration(reader, moov);
+/**
+ * Just the duration, from `mvhd` — one small fixed-size read once `moov` is
+ * found. Deliberately doesn't touch track/chapter boxes at all: those are
+ * what make the full chapter walk expensive (one extra disk read per
+ * chapter), and a scan only needs a book's length up front, not its chapter
+ * list yet.
+ */
+async function readMp4Duration(filePath) {
+  return (await withMoov(filePath, (reader, moov) => readMovieDuration(reader, moov))) ?? 0;
+}
+
+/**
+ * The expensive part: walks every track, finds the chapter track, and reads
+ * its full sample table plus one disk read per chapter title. `knownDuration`
+ * lets a caller that already has a trusted duration (e.g. from phase 1) skip
+ * re-reading `mvhd`; omit it to have this read duration itself too.
+ *
+ * @returns {Promise<{chapters: Array<{title:string,start:number}>, duration: number}>}
+ */
+async function readMp4Chapters(filePath, knownDuration) {
+  const result = await withMoov(filePath, async (reader, moov) => {
+    const duration = knownDuration ?? await readMovieDuration(reader, moov);
 
     const moovKids = await reader.children(moov.contentStart, moov.contentEnd);
     const traks = moovKids.filter((b) => b.type === 'trak');
@@ -323,16 +353,19 @@ async function readMp4Info(filePath) {
     if (duration > 0) chapters = chapters.filter((c) => c.start <= duration + 1);
 
     return { chapters, duration };
-  } catch (err) {
-    console.warn(`[chapters] ${filePath}: ${err.message}`);
-    return { chapters: [], duration: 0 };
-  } finally {
-    await fh?.close();
-  }
+  });
+  return result ?? { chapters: [], duration: knownDuration ?? 0 };
+}
+
+/** Back-compat wrapper for callers that want both in one call (e.g. extractMp4Chapters below). */
+async function readMp4Info(filePath) {
+  return readMp4Chapters(filePath);
 }
 
 async function extractMp4Chapters(filePath) {
   return (await readMp4Info(filePath)).chapters;
 }
 
-module.exports = { extractMp4Chapters, readMp4Info };
+module.exports = {
+  extractMp4Chapters, readMp4Info, readMp4Duration, readMp4Chapters,
+};

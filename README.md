@@ -178,8 +178,12 @@ installer assumes for anyone else).
   metadata-overrides.json per-book online metadata corrections
 ```
 
-Scanning a large library takes a few minutes the first time. Results are cached
-against each file's size and mtime, so rescans only reparse what changed.
+Scanning happens in two phases. The first pass reads just tags and duration —
+enough to show the grid and start playing — deferring cover art and (for
+single-file `.m4b`/`.m4a` books) chapter extraction to a low-priority
+background pass afterward, which resumes automatically if interrupted and
+jumps the queue for whatever book you open first. Results are cached against
+each file's size and mtime, so rescans only reparse what changed.
 
 ### Backup and restore
 

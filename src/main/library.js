@@ -5,7 +5,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 
 const { COVER_CACHE } = require('./paths');
-const { readMp4Info } = require('./mp4-chapters');
+const { readMp4Duration, readMp4Chapters } = require('./mp4-chapters');
 const { chaptersFromCue, hasSiblingCue } = require('./cue');
 const { groupIntoBooks, naturalCompare } = require('./group');
 
@@ -26,6 +26,10 @@ const SKIP_DIRS = new Set(['node_modules', '$RECYCLE.BIN', 'System Volume Inform
 // usually laid out close together, so the seeks between them are cheap either way.
 const BOOK_CONCURRENCY = 2;
 const TRACK_CONCURRENCY = 8;
+// Phase 2 (background cover/chapter fill, see fillBookDetails) runs even
+// gentler than BOOK_CONCURRENCY — it has to coexist with whatever the user
+// is actively doing (playback, browsing), not just other books' scanning.
+const DETAIL_CONCURRENCY = 1;
 
 // A folder of several self-contained files is ambiguous: it could be one book
 // split into short numbered parts (merge them) or a series folder of separate
@@ -167,31 +171,25 @@ async function statFiles(files) {
   return stats;
 }
 
+/**
+ * Phase 1 build for a single-file (.m4b/.m4a/lone .mp3) book: tags + duration
+ * only. Cover art and chapters are deliberately deferred to fillOneBookDetail
+ * (phase 2, see below) — the cover picture is real bytes music-metadata would
+ * otherwise decode for every book on every scan, and chapter extraction is
+ * the expensive part of readMp4Chapters (one extra disk read per chapter).
+ * `readMp4Duration` gets the fallback duration for files music-metadata can't
+ * read without paying for any of that.
+ */
 async function buildSingleFileBook(unit, stats, id) {
   const filePath = stats[0].filePath;
   const ext = path.extname(filePath).toLowerCase();
 
-  const [tags, mp4] = await Promise.all([
-    readTags(filePath, true),
-    ext === '.m4b' || ext === '.m4a' ? readMp4Info(filePath) : Promise.resolve({ chapters: [], duration: 0 }),
+  const [tags, mp4Duration] = await Promise.all([
+    readTags(filePath, false),
+    ext === '.m4b' || ext === '.m4a' ? readMp4Duration(filePath) : Promise.resolve(0),
   ]);
 
-  const duration = tags.format.duration || mp4.duration || 0;
-  let chapters = mp4.chapters.map((ch, i, all) => ({
-    index: i,
-    title: ch.title,
-    start: ch.start,
-    end: all[i + 1] ? all[i + 1].start : duration || null,
-  }));
-
-  // Fall back to a sibling .cue when the file has no embedded chapters.
-  if (chapters.length <= 1 && await hasSiblingCue(filePath)) {
-    const cueChapters = await chaptersFromCue(filePath, duration);
-    if (cueChapters.length > 1) chapters = cueChapters;
-  }
-
-  let cover = await cacheCoverFromPicture(id, tags.common.picture?.[0]);
-  if (!cover) cover = await findFolderImage(unit.dir);
+  const duration = tags.format.duration || mp4Duration || 0;
 
   return {
     id,
@@ -203,10 +201,11 @@ async function buildSingleFileBook(unit, stats, id) {
     year: tags.common.year ?? null,
     description: cleanText(tags.common.comment?.[0]?.text) || null,
     duration,
-    cover,
-    chapters,
-    tracks: [{ filePath, duration, title: chapters.length ? null : titleFromFileName(unit.name) }],
+    cover: null,
+    chapters: [],
+    tracks: [{ filePath, duration, title: titleFromFileName(unit.name) }],
     signature: unitSignature(stats),
+    detailPending: true,
     // Surfaces readTags()'s failure flag at the book level (previously computed
     // and then discarded) so a scan can report how many books it couldn't
     // actually read tags for, instead of that only being visible per-file in
@@ -215,9 +214,14 @@ async function buildSingleFileBook(unit, stats, id) {
   };
 }
 
+/**
+ * Phase 1 build for a multi-track (mp3-folder) book. Unlike the single-file
+ * case, chapters fall out for free here — one per track, from the same tag
+ * reads duration already needs — so only cover art is deferred to phase 2.
+ */
 async function buildMultiTrackBook(unit, stats, id) {
-  const parsed = await mapLimit(stats, TRACK_CONCURRENCY, async (s, index) =>
-    ({ ...s, tags: await readTags(s.filePath, index === 0) }));
+  const parsed = await mapLimit(stats, TRACK_CONCURRENCY, async (s) =>
+    ({ ...s, tags: await readTags(s.filePath, false) }));
 
   const first = parsed[0];
   const tracks = [];
@@ -247,9 +251,6 @@ async function buildMultiTrackBook(unit, stats, id) {
     if (cueChapters.length > 1) chapterList = cueChapters;
   }
 
-  let cover = await cacheCoverFromPicture(id, first?.tags.common.picture?.[0]);
-  if (!cover) cover = await findFolderImage(unit.dir);
-
   return {
     id,
     kind: 'multi',
@@ -262,12 +263,100 @@ async function buildMultiTrackBook(unit, stats, id) {
     year: first?.tags.common.year ?? null,
     description: cleanText(first?.tags.common.comment?.[0]?.text) || null,
     duration: elapsed,
-    cover,
+    cover: null,
     chapters: chapterList,
     tracks,
     signature: unitSignature(stats),
+    detailPending: true,
     tagsFailed: parsed.some((p) => p.tags.failed),
   };
+}
+
+/**
+ * Phase 2: fill in what phase 1 deferred for one book — cover art always,
+ * plus real chapters for a single-file book (multi-track books already got
+ * theirs for free in phase 1). Re-reads the file(s), so this is real extra
+ * I/O — deliberately not paid at scan time, only here, lazily.
+ */
+async function fillOneBookDetail(book) {
+  const filePath = book.tracks[0].filePath;
+
+  if (book.kind === 'single') {
+    const ext = path.extname(filePath).toLowerCase();
+    const [tags, mp4] = await Promise.all([
+      readTags(filePath, true),
+      ext === '.m4b' || ext === '.m4a'
+        ? readMp4Chapters(filePath, book.duration)
+        : Promise.resolve({ chapters: [], duration: book.duration }),
+    ]);
+
+    let chapters = mp4.chapters.map((ch, i, all) => ({
+      index: i,
+      title: ch.title,
+      start: ch.start,
+      end: all[i + 1] ? all[i + 1].start : book.duration || null,
+    }));
+
+    if (chapters.length <= 1 && await hasSiblingCue(filePath)) {
+      const cueChapters = await chaptersFromCue(filePath, book.duration);
+      if (cueChapters.length > 1) chapters = cueChapters;
+    }
+
+    let cover = await cacheCoverFromPicture(book.id, tags.common.picture?.[0]);
+    if (!cover) cover = await findFolderImage(book.sourceDir);
+
+    return {
+      ...book,
+      cover,
+      chapters,
+      tracks: [{ ...book.tracks[0], title: chapters.length ? null : book.tracks[0].title }],
+      detailPending: false,
+    };
+  }
+
+  // multi: chapters are already final from phase 1, only cover was deferred.
+  const tags = await readTags(filePath, true);
+  let cover = await cacheCoverFromPicture(book.id, tags.common.picture?.[0]);
+  if (!cover) cover = await findFolderImage(book.sourceDir);
+  return { ...book, cover, detailPending: false };
+}
+
+// bookId -> Promise<book>, shared between the background fill loop and any
+// on-demand request (a book opened before the background loop reaches it) so
+// the same book is never detail-filled twice concurrently.
+const detailInFlight = new Map();
+
+/** Fills in one book's detail if it isn't already, de-duped against concurrent callers. */
+function ensureDetail(book) {
+  if (!book.detailPending) return Promise.resolve(book);
+  let p = detailInFlight.get(book.id);
+  if (!p) {
+    p = fillOneBookDetail(book)
+      .catch((err) => {
+        console.warn(`[library] detail fill failed for ${book.sourceDir}: ${err.message}`);
+        // Best-effort, same precedent as tagsFailed above: don't retry forever
+        // on every launch. A real rescan (changed signature) will try again.
+        return { ...book, detailPending: false, detailFailed: true };
+      })
+      .finally(() => detailInFlight.delete(book.id));
+    detailInFlight.set(book.id, p);
+  }
+  return p;
+}
+
+/**
+ * Background pass: fills in every still-pending book's detail, at a
+ * deliberately gentle concurrency (see DETAIL_CONCURRENCY). Reports each
+ * completed book via onBookDone so the caller can persist + broadcast
+ * incrementally rather than waiting for the whole backlog.
+ */
+async function fillBookDetails(books, { concurrency = DETAIL_CONCURRENCY, onBookDone, isCancelled } = {}) {
+  const pending = books.filter((b) => b.detailPending);
+  await mapLimit(pending, concurrency, async (book) => {
+    if (isCancelled?.()) return;
+    const updated = await ensureDetail(book);
+    if (!isCancelled?.()) onBookDone?.(updated);
+  });
 }
 
 function median(values) {
@@ -304,7 +393,7 @@ async function consolidateSelfContainedParts(units) {
 
     const durations = await mapLimit(dirUnits, TRACK_CONCURRENCY, async (u) => {
       try {
-        return (await readMp4Info(u.files[0])).duration || 0;
+        return await readMp4Duration(u.files[0]);
       } catch {
         return 0;
       }
@@ -377,4 +466,6 @@ async function scanLibrary(folders, cachedBooks = [], onProgress) {
   return books;
 }
 
-module.exports = { scanLibrary, AUDIO_EXTENSIONS, hashId };
+module.exports = {
+  scanLibrary, fillBookDetails, ensureDetail, AUDIO_EXTENSIONS, hashId,
+};

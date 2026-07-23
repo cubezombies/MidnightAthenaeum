@@ -104,6 +104,11 @@ Already shipped, so it is not repeated in the lists below:
   Audio graph as skip-silence/normalization, to keep dialogue intelligible
   at 2.5–3× where deep-voiced narration turns muddy (Tier 2 #8, shipped).
   Off by default; ramps smoothly rather than snapping. Shipped 2026-07-23.
+- **Two-phase library scanning** — a scan shows the grid much sooner by
+  deferring cover art and (for single-file books) chapter extraction to a
+  low-priority background pass, with an on-demand fast-track for whatever
+  book you open first (Performance & architecture #5, shipped). Confirmed
+  faster hands-on against the real ~6,300-book library. Shipped 2026-07-23.
 
 Known gaps carried forward as motivation: series volumes can share a display
 title, box sets stay whole, and merged `.m4b` parts collapse to one chapter each.
@@ -615,11 +620,23 @@ and update only what changed, so new books appear without a manual full rescan.
 The size+mtime cache already makes rescans cheap; this closes the loop to
 near-real-time.
 
-### 5. Two-phase / lazy scanning — **M**
-Phase 1: walk paths + read durations only (fast; enough to build the grouping and
-show the grid). Phase 2: extract covers and chapters lazily — on demand when a
-book is opened, or as a low-priority background pass. Gets a usable library on
-screen in seconds instead of minutes on first run.
+### 5. Two-phase / lazy scanning — **shipped** ✅
+Phase 1 (`scanLibrary`) reads tags + duration only — no cover art, and for
+single-file `.m4b`/`.m4a` books, no chapters either (multi-track mp3-folder
+books get chapters for free from the same per-track tag reads duration
+already needs, so only their cover is deferred). `readMp4Duration()` reads
+just the `mvhd` atom instead of the full chapter-track walk that costs one
+extra disk read per chapter. Phase 2 (`fillBookDetails`/`ensureDetail` in
+`library.js`) fills in cover + chapters afterward: a low-priority background
+pass that resumes automatically across restarts if interrupted, and a
+same-book on-demand path that jumps the queue when you open a book before
+the background pass reaches it (de-duplicated against each other via a
+shared in-flight map, so neither redoes the other's work). Playback was
+already never gated on chapters/cover, only tracks/duration, so a book is
+fully playable the instant phase 1 finds it. Verified against a 37-check
+synthetic harness (real `ffmpeg`-generated `.m4b`/`.mp3` fixtures with
+actual chapter atoms and embedded art) before ever touching the real
+library, then confirmed faster hands-on.
 
 ### 6. Worker-thread parsing — **S/M**
 Move metadata/chapter parsing into `worker_threads` so a first-run scan doesn't

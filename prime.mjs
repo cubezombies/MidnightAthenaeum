@@ -5,7 +5,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { scanLibrary } = require('./src/main/library.js');
+const { scanLibrary, fillBookDetails } = require('./src/main/library.js');
 const { LIBRARY_FILE, DATA_ROOT } = require('./src/main/paths.js');
 
 const folders = process.argv.slice(2);
@@ -22,6 +22,7 @@ try {
 
 const t0 = Date.now();
 let lastLog = 0;
+console.log('phase 1: tags + duration…');
 const books = await scanLibrary(folders, cached, (done, total) => {
   const now = Date.now();
   if (now - lastLog > 2000 || done === total) {
@@ -32,6 +33,36 @@ const books = await scanLibrary(folders, cached, (done, total) => {
     console.log(`  ${done}/${total} books  ${elapsed.toFixed(0)}s elapsed  ETA ${eta.toFixed(0)}s`);
   }
 });
+
+// Priming exists to move ALL the slow work off the interactive app-launch
+// path, so unlike the app's own background fill (deliberately gentle, low
+// concurrency, so it doesn't compete with foreground use), this runs phase 2
+// to completion too, right here, before the app ever launches.
+const pendingCount = books.filter((b) => b.detailPending).length;
+if (pendingCount) {
+  console.log(`phase 2: covers + chapters for ${pendingCount} book(s)…`);
+  const t1 = Date.now();
+  let filled = 0;
+  // fillBookDetails doesn't mutate `books` -- it hands each updated book to
+  // onBookDone and leaves merging to the caller (main.js does the same via
+  // writeDetailUpdate).
+  const detailed = new Map();
+  await fillBookDetails(books, {
+    concurrency: 2,
+    onBookDone: (updated) => {
+      detailed.set(updated.id, updated);
+      filled += 1;
+      const now = Date.now();
+      if (now - lastLog > 2000 || filled === pendingCount) {
+        lastLog = now;
+        console.log(`  ${filled}/${pendingCount} detailed  ${((now - t1) / 1000).toFixed(0)}s elapsed`);
+      }
+    },
+  });
+  for (let i = 0; i < books.length; i += 1) {
+    if (detailed.has(books[i].id)) books[i] = detailed.get(books[i].id);
+  }
+}
 
 await mkdir(DATA_ROOT, { recursive: true });
 await writeFile(LIBRARY_FILE, JSON.stringify({ folders, books }, null, 2), 'utf8');

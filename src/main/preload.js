@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('api', {
   // replacement, needed to resolve a drag-and-dropped folder's real path.
   getPathForFile: (file) => webUtils.getPathForFile(file),
   rescan: () => ipcRenderer.invoke('library:rescan'),
+  ensureBookDetail: (bookId) => ipcRenderer.invoke('library:ensureBookDetail', bookId),
   saveProgress: (payload) => ipcRenderer.invoke('progress:save', payload),
   clearProgress: (bookId) => ipcRenderer.invoke('progress:clear', bookId),
   setFinished: (payload) => ipcRenderer.invoke('progress:setFinished', payload),
@@ -62,6 +63,16 @@ contextBridge.exposeInMainWorld('api', {
     const listener = (_event, state) => cb(state);
     ipcRenderer.on('library:changed', listener);
     return () => ipcRenderer.off('library:changed', listener);
+  },
+  onBooksUpdated: (cb) => {
+    const listener = (_event, books) => cb(books);
+    ipcRenderer.on('library:booksUpdated', listener);
+    return () => ipcRenderer.off('library:booksUpdated', listener);
+  },
+  onDetailProgress: (cb) => {
+    const listener = (_event, payload) => cb(payload);
+    ipcRenderer.on('library:detailProgress', listener);
+    return () => ipcRenderer.off('library:detailProgress', listener);
   },
   onScanProgress: (cb) => {
     const listener = (_event, payload) => cb(payload);

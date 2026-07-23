@@ -773,6 +773,14 @@ function openBook(bookId) {
   updateMetadataUI(book);
   updateTranscribeUI(book);
   loadIntoPlayer(book);
+
+  // Cover/chapters weren't scanned yet (see library.js's two-phase scan) —
+  // fast-track this one book rather than waiting for the background fill to
+  // reach it. Playback already works either way (loadIntoPlayer only needs
+  // tracks/duration, both always present after phase 1).
+  if (book.detailPending) {
+    window.api.ensureBookDetail(bookId).then((result) => patchBooks(result?.book ? [result.book] : []));
+  }
 }
 
 /** Reflect the book's effective finished status on the toggle button's label. */
@@ -819,7 +827,12 @@ function renderChapters(book) {
     el.chapterCount.textContent = '';
     const li = document.createElement('li');
     li.className = 'no-chapters';
-    li.textContent = 'This file has no embedded chapters — use the 30-second skip buttons to navigate.';
+    // A still-pending single-file book hasn't had its chapters extracted yet
+    // (multi-track books already have theirs after phase 1 of the scan) —
+    // distinct from a file that's actually been checked and has none.
+    li.textContent = book.detailPending
+      ? 'Loading chapters…'
+      : 'This file has no embedded chapters — use the 30-second skip buttons to navigate.';
     el.chapterList.append(li);
     return;
   }
@@ -2075,7 +2088,7 @@ el.metadataApplyBtn.addEventListener('click', async () => {
       source: 'openlibrary',
       sourceKey: candidate.key,
     });
-    patchBook(next.book);
+    patchBooks(next.book ? [next.book] : []);
     closeMetadataModal();
     showToast(`Applied "${candidate.title}" from Open Library.`);
   } finally {
@@ -2087,7 +2100,7 @@ el.metadataApplyBtn.addEventListener('click', async () => {
 el.metadataRevertBtn.addEventListener('click', async () => {
   if (!state.current) return;
   const next = await window.api.clearMetadata(state.current.id);
-  patchBook(next.book);
+  patchBooks(next.book ? [next.book] : []);
   showToast('Reverted to the file\'s own tags.');
 });
 
@@ -2802,39 +2815,66 @@ function applyState(next) {
 }
 
 /**
- * Patch a single book in place (metadata:apply / metadata:clear only ever
- * change one book's title/author/description/cover) instead of going through
- * applyState's full-library replace — those two IPC calls now return just
- * `{ book }` rather than the whole currentState(), so there's no full array
- * to diff against here either.
+ * Patch one or more books in place — metadata:apply/metadata:clear each
+ * change a single book, while a phase-2 background detail fill
+ * (library:booksUpdated) can arrive in batches — instead of going through
+ * applyState's full-library replace, since none of these calls carry (or
+ * need) the whole currentState().
  */
-function patchBook(book) {
-  if (!book) return;
-  const idx = state.books.findIndex((b) => b.id === book.id);
-  if (idx === -1) return;
-  state.books[idx] = book;
+function patchBooks(updated) {
+  if (!updated?.length) return;
+  const byId = new Map(updated.map((b) => [b.id, b]));
+  state.books = state.books.map((b) => byId.get(b.id) ?? b);
 
-  if (state.current?.id === book.id) {
-    state.current = book;
-    renderBookHeader(book);
-    renderChapters(book);
-    renderBookmarks(book);
-    updateFinishedButton(book);
-    updateMetadataUI(book);
+  if (state.current && byId.has(state.current.id)) {
+    const refreshed = byId.get(state.current.id);
+    state.current = refreshed;
+    renderBookHeader(refreshed);
+    renderChapters(refreshed);
+    renderBookmarks(refreshed);
+    updateFinishedButton(refreshed);
+    updateMetadataUI(refreshed);
   }
-  renderLibrary();
+  // A background detail fill can patch dozens of books over a long backlog;
+  // skip rebuilding the grid while it's not even visible. showLibrary()
+  // already calls renderLibrary() unconditionally on navigation, so it's
+  // never stale by the time the user actually looks at it.
+  if (!el.libraryView.classList.contains('hidden')) renderLibrary();
 }
+window.api.onBooksUpdated(patchBooks);
 
 window.api.onLibraryChanged(applyState);
+// Two independent progress sources share one status line: a foreground scan
+// (phase 1) always wins the text while it's running; a background detail
+// fill (phase 2 — cover/chapters, see library.js) shows once phase 1 isn't
+// active, so a long backlog is visible instead of silent.
+let lastScanProgress = { done: 0, total: 0, scanning: false };
+let lastDetailProgress = { done: 0, total: 0, active: false };
+
+function renderScanStatus() {
+  if (lastScanProgress.scanning) {
+    el.scanStatus.textContent = lastScanProgress.total
+      ? `Scanning ${lastScanProgress.done}/${lastScanProgress.total}…`
+      : 'Scanning…';
+  } else if (lastDetailProgress.active) {
+    el.scanStatus.textContent = `Filling in covers & chapters: ${lastDetailProgress.done}/${lastDetailProgress.total}…`;
+  } else {
+    el.scanStatus.textContent = '';
+  }
+}
+
 window.api.onScanProgress(({ done, total, scanning }) => {
-  el.scanStatus.textContent = scanning
-    ? (total ? `Scanning ${done}/${total}…` : 'Scanning…')
-    : '';
+  lastScanProgress = { done, total, scanning };
+  renderScanStatus();
   el.rescanBtn.disabled = scanning;
 
   el.scanProgressBar.classList.toggle('hidden', !scanning);
   el.scanProgressBar.classList.toggle('indeterminate', scanning && !total);
   el.scanProgressFill.style.width = total ? `${Math.min(100, (done / total) * 100)}%` : '0%';
+});
+window.api.onDetailProgress(({ done, total, active }) => {
+  lastDetailProgress = { done, total, active };
+  renderScanStatus();
 });
 
 el.groupToggle.setAttribute('aria-pressed', String(state.groupSeries));

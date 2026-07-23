@@ -8,6 +8,19 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-23
+### Changed
+- **Two-phase library scanning** — a scan now shows the grid much sooner by
+  deferring the expensive parts of each book. Phase 1 reads only tags and
+  duration (skipping cover art entirely, and — for single-file `.m4b`/`.m4a`
+  books — chapter extraction, which costs one extra disk read per chapter).
+  Phase 2 fills in cover art and chapters afterward, in the background at
+  low priority, resuming automatically if interrupted and jumping the queue
+  for any book you open before it gets there. Multi-track (mp3-folder)
+  books are unaffected — their chapters already come for free alongside
+  duration. Playback was never gated on chapters or cover art, so a book is
+  fully playable the moment phase 1 finds it.
+
 ## [0.8.0] - 2026-07-23
 ### Added
 - **Voice Boost** — a speech-tuned EQ for fast listening, where deep-voiced

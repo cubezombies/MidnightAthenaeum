@@ -40,7 +40,8 @@ app.setPath('userData', USER_DATA);
 app.setPath('sessionData', USER_DATA);
 
 const { JsonStore } = require('./store');
-const { scanLibrary, hashId } = require('./library');
+const library = require('./library');
+const { scanLibrary, hashId } = library;
 const { registerScheme, registerMediaProtocol, mediaUrl } = require('./media-protocol');
 const { searchOpenLibrary, fetchWorkDescription, downloadCover } = require('./metadata-lookup');
 const updater = require('./updater');
@@ -201,6 +202,11 @@ function toClientBook(book) {
     trackCount: book.tracks.length,
     metadataSource: override?.source ?? null,
     metadataFetchedAt: override?.fetchedAt ?? null,
+    // True for a book phase 1 built but hasn't had its cover/chapters filled
+    // in yet (see library.js's fillBookDetails) — undefined on any book from
+    // before this field existed, which is already the correct "fully
+    // detailed" reading for a pre-existing library.
+    detailPending: Boolean(book.detailPending),
   };
 }
 
@@ -610,8 +616,85 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+/**
+ * Only writes an updated (cover/chapters-filled) book back if it's still
+ * there under the same id *and* its signature hasn't moved on since. Covers
+ * two real races: the book was removed (duplicates:remove) or given a new
+ * id (reorganize) while its detail fill was in flight — id lookup fails,
+ * dropped; or a concurrent rescan rebuilt the same id differently —
+ * signature mismatch, dropped. Either way this is a silent no-op, never an
+ * error: the book just stays (or goes back to) detailPending and gets
+ * picked up again later.
+ */
+function writeDetailUpdate(updated) {
+  const s = libraryStore.get();
+  const idx = s.books.findIndex((b) => b.id === updated.id);
+  if (idx === -1) return false;
+  if (s.books[idx].signature !== updated.signature) return false;
+  libraryStore.set({ ...s, books: s.books.map((b, i) => (i === idx ? updated : b)) });
+  return true;
+}
+
+let detailFillRunning = false;
+let detailFillPromise = Promise.resolve();
+let detailFillCancelToken = { cancelled: false };
+
+/** Stops the background detail fill and waits for its current book to finish, so a fresh rescan never races its cache snapshot against phase 2 still writing to the store. */
+async function stopDetailFill() {
+  detailFillCancelToken.cancelled = true;
+  await detailFillPromise;
+}
+
+/**
+ * Background phase 2: fills in cover/chapters for whatever's still
+ * detailPending, batching updates into occasional library:booksUpdated
+ * broadcasts (unlike phase 1's single end-of-scan broadcast, this is
+ * long-running against a fixed-length array, so incremental beats one big
+ * payload here). Fire-and-forget from the caller's perspective.
+ */
+function runDetailFill() {
+  if (detailFillRunning) return detailFillPromise;
+  const state = libraryStore.get();
+  const pendingCount = state.books.filter((b) => b.detailPending).length;
+  if (!pendingCount) return Promise.resolve();
+
+  detailFillRunning = true;
+  detailFillCancelToken = { cancelled: false };
+  const token = detailFillCancelToken;
+  let done = 0;
+  let batch = [];
+  let lastFlush = Date.now();
+
+  const flush = () => {
+    if (!batch.length) return;
+    mainWindow?.webContents.send('library:booksUpdated', batch.map(toClientBook));
+    batch = [];
+    lastFlush = Date.now();
+  };
+
+  mainWindow?.webContents.send('library:detailProgress', { done, total: pendingCount, active: true });
+
+  detailFillPromise = library.fillBookDetails(state.books, {
+    isCancelled: () => token.cancelled,
+    onBookDone: (updated) => {
+      if (!writeDetailUpdate(updated)) return;
+      done += 1;
+      batch.push(updated);
+      if (batch.length >= 25 || Date.now() - lastFlush > 1000) flush();
+      mainWindow?.webContents.send('library:detailProgress', { done, total: pendingCount, active: true });
+    },
+  }).finally(() => {
+    flush();
+    detailFillRunning = false;
+    mainWindow?.webContents.send('library:detailProgress', { done, total: pendingCount, active: false });
+  });
+
+  return detailFillPromise;
+}
+
 async function runScan() {
   if (scanning) return;
+  await stopDetailFill(); // phase 2 must fully quiesce before we read the cache snapshot below
   const state = libraryStore.get();
   if (!state.folders.length) {
     libraryStore.set({ ...state, books: [] });
@@ -635,6 +718,7 @@ async function runScan() {
     mainWindow?.webContents.send('library:scan-progress', { done: 0, total: 0, scanning: false });
     mainWindow?.webContents.send('library:changed', currentState());
     refreshJumpList(); // a removed/renamed book could be sitting in the list
+    runDetailFill(); // background phase 2 for whatever's still detailPending -- fire-and-forget
   }
 }
 
@@ -698,6 +782,24 @@ function registerIpc() {
   });
 
   ipcMain.handle('library:rescan', () => { runScan(); return currentState(); });
+
+  /**
+   * Fast-tracks one book's phase-2 detail fill (cover/chapters) for when the
+   * user opens it before the background pass (runDetailFill) reaches it —
+   * library.ensureDetail de-dupes this against that same background pass, so
+   * the same book is never filled twice concurrently either way.
+   */
+  ipcMain.handle('library:ensureBookDetail', async (_event, bookId) => {
+    if (typeof bookId !== 'string') return { book: null };
+    const raw = libraryStore.get().books.find((b) => b.id === bookId);
+    if (!raw) return { book: null };
+    if (!raw.detailPending) return { book: toClientBook(raw) };
+
+    const updated = await library.ensureDetail(raw);
+    writeDetailUpdate(updated); // no-op if the book was removed/reorganized/rescanned meanwhile
+    const fresh = libraryStore.get().books.find((b) => b.id === updated.id) ?? raw;
+    return { book: toClientBook(fresh) };
+  });
 
   ipcMain.handle('progress:save', (_event, { bookId, position, duration, speed }) => {
     if (typeof bookId !== 'string' || typeof position !== 'number') return;
