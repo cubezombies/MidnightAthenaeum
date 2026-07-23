@@ -8,6 +8,22 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-07-22
+### Fixed
+- **Critical**: the preload script has been failing to load entirely since
+  0.4.2, breaking `window.api` for the whole app — every button, the
+  library load on startup, and the updates dialog all silently threw
+  `Cannot read properties of undefined`. Cause: preload.js runs sandboxed
+  (`webPreferences.sandbox: true`), and a sandboxed preload's `require()`
+  only resolves a small built-in whitelist, not local project files — the
+  `require('./finished')` added in 0.4.2 to share the "finished" threshold
+  constant with main.js threw `module not found` at load time and silently
+  killed the entire preload script. Fixed by inlining the (3-line) function
+  directly in preload.js instead of requiring the shared module, with a
+  comment explaining why. Everything that looked like separate bugs the last
+  few releases — the empty library after updating, "Check for Updates" not
+  opening, rescan/search doing nothing — was this one root cause.
+
 ## [0.4.4] - 2026-07-22
 ### Added
 - **View → Toggle Developer Tools**, with the standard Ctrl+Shift+I/F12

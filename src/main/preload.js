@@ -1,11 +1,20 @@
 'use strict';
 
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
-const { isFinishedByPosition } = require('./finished');
+
+// Mirrors FINISHED_TAIL_SECONDS/isFinishedByPosition in src/main/finished.js.
+// Can't require('./finished') here: this preload runs sandboxed
+// (webPreferences sandbox: true), and a sandboxed preload's require() only
+// resolves a small built-in whitelist, not local project files — attempting
+// it throws "module not found" and silently kills the whole preload script,
+// which is a much worse failure than a duplicated constant (window.api ends
+// up undefined, breaking every IPC call the app makes). If this threshold
+// ever changes, update both copies.
+function isFinishedByPosition(position, duration) {
+  return duration ? position >= duration - 30 : false;
+}
 
 contextBridge.exposeInMainWorld('api', {
-  // Pure/sync — lets the renderer compute the same "finished" value main.js
-  // will persist, without duplicating the threshold constant on both sides.
   isFinishedByPosition,
 
   getState: () => ipcRenderer.invoke('library:getState'),
