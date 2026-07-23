@@ -310,6 +310,15 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 }
 .new-badge-series { top: 7px; right: auto; left: 7px; }
 
+/* Bottom corner, since top-left/top-right are already the series-# and NEW badges. */
+.ebook-badge {
+  position: absolute; bottom: 7px; right: 7px; z-index: 2;
+  width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+  background: rgba(18, 18, 26, .85); color: var(--text);
+  border-radius: 6px;
+}
+.ebook-badge .icon { width: 14px; height: 14px; }
+
 /* ---------- Library grid ---------- */
 .grid {
   display: grid;
@@ -816,5 +825,53 @@ body.playing .toast { bottom: calc(var(--player-h) + 20px); }
 .updates-notes-body strong { color: var(--text); font-weight: 600; }
 .updates-notes-body code {
   background: var(--bg-elev); border-radius: 4px; padding: 1px 5px; font-size: 12px;
+}
+
+/* ---------- Read along ---------- */
+/* A docked overlay, not a reflowed layout column -- keeps the existing book
+   view untouched and lets the panel show/hide independently of scroll
+   position. Sits above the player (z-index 5) so its own controls stay
+   reachable, below modals (50/60) since those are meant to block everything. */
+.read-along-panel {
+  position: fixed; top: 0; right: 0; bottom: 0;
+  width: min(420px, 100vw);
+  display: flex; flex-direction: column;
+  background: var(--bg-elev); border-left: 1px solid var(--line);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+  z-index: 15;
+  transform: translateX(100%);
+  transition: transform .25s ease;
+}
+.read-along-panel:not(.hidden) { transform: translateX(0); }
+body.playing .read-along-panel { bottom: var(--player-h); }
+
+.read-along-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px; border-bottom: 1px solid var(--line); flex-shrink: 0;
+}
+.read-along-header h3 { flex: 1; min-width: 0; font-size: 15px; }
+.btn.small { padding: 5px 10px; font-size: 12px; }
+
+.read-along-nav {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; border-bottom: 1px solid var(--line); flex-shrink: 0;
+}
+.read-along-nav select { flex: 1; min-width: 0; }
+.read-along-next .icon { transform: scaleX(-1); }
+
+.read-along-status { padding: 12px 16px; }
+
+.read-along-text {
+  flex: 1; overflow-y: auto; padding: 4px 20px 24px;
+  font: 15px/1.7 Georgia, 'Cambria', serif;
+  color: var(--text);
+}
+.read-along-text p { margin: 0 0 1em; transition: background .2s ease; }
+/* Best-effort "currently narrated" estimate (proportional position within
+   the chapter, not real synced highlighting) -- see updateReadAlongProgress
+   in app.js. */
+.read-along-text p.read-along-current {
+  background: var(--accent-soft); border-radius: 4px;
+  margin-left: -8px; margin-right: -8px; padding: 2px 8px;
 }
 .updates-notes-body a { color: var(--accent); }

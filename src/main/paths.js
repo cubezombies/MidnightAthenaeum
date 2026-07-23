@@ -61,6 +61,10 @@ module.exports = {
   BOOKMARKS_FILE: path.join(DATA_ROOT, 'bookmarks.json'),
   NORMALIZATION_FILE: path.join(DATA_ROOT, 'normalization.json'),
   METADATA_FILE: path.join(DATA_ROOT, 'metadata-overrides.json'),
+  // { [bookId]: { epubPath, source: 'auto'|'manual' } } -- read-along ebook
+  // pairings. Same shape/precedent as METADATA_FILE: a user-correctable
+  // annotation kept separate from the scanned book record, not scan output.
+  EBOOK_PAIRING_FILE: path.join(DATA_ROOT, 'ebook-pairings.json'),
   // Per-book timestamped transcripts (opt-in, local Whisper transcription).
   TRANSCRIPTS_DIR: path.join(DATA_ROOT, 'transcripts'),
   // The downloaded ggml model file(s) — large (100MB+), kept out of backups

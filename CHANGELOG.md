@@ -8,6 +8,32 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-23
+### Added
+- **Read along** — pairs an EPUB with its matching audiobook and shows the
+  current chapter's text in a side panel while you listen. A new **Read
+  along** button in the book view opens it (or prompts to pick the ebook
+  file if none was found automatically); a background pass checks the whole
+  library for matches over time, powering a new **Has ebook** library
+  filter and a card badge. The panel auto-advances to the chapter matching
+  what's playing when confident (exact chapter-count match, or proportional
+  position as a weaker signal — never a wrong guess), and estimates your
+  paragraph position within that chapter from how far through the audio
+  chapter you are. Word-level highlighting is a further-out idea — this is
+  the "even without it, showing the matching chapter is valuable" version
+  from the roadmap.
+  - New `src/main/epub.js`: a hand-rolled EPUB reader (ZIP central-directory
+    parsing + narrow container.xml/OPF/NCX/nav.xhtml extraction), no new
+    dependency. Handles nested/fragment-split tables of contents,
+    percent-encoded paths, and both EPUB2 and EPUB3 conventions; chapter
+    text is extracted safely in the renderer via `DOMParser`, not
+    main-process regex.
+  - New `src/main/ebook-pairing.js`: on-demand (not scan-time) folder-
+    proximity matching, tuned against a real-data dry run of this library.
+  - Verified with a 32-check synthetic EPUB harness (real generated
+    fixtures covering nested TOCs, both EPUB eras, malformed markup, and a
+    simulated DRM failure) before ever touching real files.
+
 ## [0.9.1] - 2026-07-23
 ### Fixed
 - Skip-silence was cutting into narrators pausing to breathe mid-sentence

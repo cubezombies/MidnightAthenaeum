@@ -109,6 +109,15 @@ Already shipped, so it is not repeated in the lists below:
   low-priority background pass, with an on-demand fast-track for whatever
   book you open first (Performance & architecture #5, shipped). Confirmed
   faster hands-on against the real ~6,300-book library. Shipped 2026-07-23.
+- **Read along (EPUB)** — pairs an EPUB with its audiobook and shows the
+  matching chapter's text in a book-view side panel, opened via a per-book
+  **Read along** button (auto-pairs by folder proximity, or pick manually);
+  a background pass checks the whole library over time, powering a **Has
+  ebook** filter and card badge. Auto-advances chapters when confident and
+  estimates paragraph position from time elapsed — real word-level sync
+  needs the Whisper transcript aligned to text and is future work (Tier 2
+  #6, shipped, EPUB only). Confirmed working hands-on, including the
+  paragraph-position estimate. Shipped 2026-07-23.
 
 Known gaps carried forward as motivation: series volumes can share a display
 title, box sets stay whole, and merged `.m4b` parts collapse to one chapter each.
@@ -479,13 +488,31 @@ rather than an error, and a real Open Library cover thumbnail loads in the
 results list under the app's CSP (`img-src` allows `covers.openlibrary.org`
 specifically, nothing broader).
 
-### 6. Read-along / immersion reading (audio + ebook) — **L** ⭐
-The library holds **354 `.epub`, 139 `.mobi`, 116 `.pdf`** sitting next to audio
-files. Pair an ebook with its audiobook and highlight text as it's narrated
-(à la Kindle "Immersion Reading" / Storyteller). Even without word-level sync,
-showing the matching ebook chapter alongside audio is valuable and unique on
-Windows. Word-level sync is the ambitious version (needs the Whisper transcript
-to align text to audio).
+### 6. Read-along / immersion reading (audio + ebook) — **shipped** ✅ (EPUB only)
+Pairs an EPUB with its audiobook and shows the matching chapter's text in a
+book-view side panel, opened via a per-book **Read along** button
+(auto-pairs by folder proximity, falls back to a manual file picker), plus
+a **Has ebook** library filter and card badge from a gentle background pass
+that checks the whole library over time. Scoped to EPUB only — MOBI (139
+files) is a proprietary format Amazon itself deprecated in 2021, and PDF
+(116 files) has no reliable chapter structure; both would need much more
+work for much less reliability. The panel auto-advances chapters when
+confident (exact chapter-count match, or proportional position as a weaker
+signal) and estimates paragraph position within a chapter from time elapsed
+— real word-level sync is still the "ambitious version," needing the
+Whisper transcript aligned to text, not attempted here.
+`src/main/epub.js` hand-rolls a ZIP + narrow XML reader (no new dependency,
+same spirit as `mp4-chapters.js`) — verified against a 32-check synthetic
+harness (real generated EPUB2/EPUB3 fixtures covering nested/fragment-split
+TOCs, percent-encoded paths, malformed markup, and a simulated DRM failure)
+before ever touching real files. The pairing search radius was tuned twice
+against a real read-only dry run of this ~6,300-book library: a first pass
+assumed `E-Books/` subfolders (from the earlier sidecar-metadata
+investigation) and only covered 29% of the library's real epub files; the
+actual dominant convention turned out to be a bare `epub` subfolder, fixed
+after inspecting the real folder structure directly rather than guessing
+further. Remaining unmatched epubs were hand-checked and are consistently
+epub-only acquisitions with no audiobook counterpart, not radius misses.
 
 ### 7. Discord Rich Presence — **shipped** ✅
 A topbar toggle (off by default) shows "Listening to *\<title>* — Ch. N" on

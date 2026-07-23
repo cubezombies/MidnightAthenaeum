@@ -58,6 +58,11 @@ contextBridge.exposeInMainWorld('api', {
   cancelReorganize: () => ipcRenderer.invoke('reorganize:cancel'),
   undoReorganize: () => ipcRenderer.invoke('reorganize:undo'),
   hasReorganizeUndo: () => ipcRenderer.invoke('reorganize:hasUndo'),
+  findEbookPairing: (bookId) => ipcRenderer.invoke('ebook:findPairing', bookId),
+  setEbookPairing: (payload) => ipcRenderer.invoke('ebook:setPairing', payload),
+  pickEbookFile: () => ipcRenderer.invoke('ebook:pickFile'),
+  getEbookToc: (bookId) => ipcRenderer.invoke('ebook:getToc', bookId),
+  getEbookSpineHtml: (payload) => ipcRenderer.invoke('ebook:getSpineHtml', payload),
 
   onLibraryChanged: (cb) => {
     const listener = (_event, state) => cb(state);
@@ -73,6 +78,11 @@ contextBridge.exposeInMainWorld('api', {
     const listener = (_event, payload) => cb(payload);
     ipcRenderer.on('library:detailProgress', listener);
     return () => ipcRenderer.off('library:detailProgress', listener);
+  },
+  onPairingProgress: (cb) => {
+    const listener = (_event, payload) => cb(payload);
+    ipcRenderer.on('library:pairingProgress', listener);
+    return () => ipcRenderer.off('library:pairingProgress', listener);
   },
   onScanProgress: (cb) => {
     const listener = (_event, payload) => cb(payload);

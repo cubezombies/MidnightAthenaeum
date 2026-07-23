@@ -9,7 +9,7 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 const {
   USER_DATA, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
   METADATA_FILE, DATA_ROOT, OS_DEFAULT_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, BACKUP_DIR,
-  REORG_ID_MAP_FILE, setDataLocation, clearDataLocation,
+  REORG_ID_MAP_FILE, EBOOK_PAIRING_FILE, setDataLocation, clearDataLocation,
 } = require('./paths');
 const { isFinishedByPosition } = require('./finished');
 
@@ -50,6 +50,8 @@ const discord = require('./discord-presence');
 const transcriber = require('./transcribe');
 const duplicates = require('./duplicates');
 const reorganizer = require('./reorganize');
+const epub = require('./epub');
+const ebookPairing = require('./ebook-pairing');
 
 registerScheme();
 
@@ -64,6 +66,10 @@ const normalizationStore = new JsonStore(NORMALIZATION_FILE, {});
 // the scanned tags in toClientBook(). Never written by anything but the
 // metadata:apply / metadata:clear handlers below — no automatic lookups.
 const metadataStore = new JsonStore(METADATA_FILE, {});
+// { [bookId]: { epubPath, source: 'auto'|'manual' } } -- read-along ebook
+// pairings. 'manual' entries (and explicit "no ebook" picks) are never
+// overwritten by a later automatic guess.
+const pairingStore = new JsonStore(EBOOK_PAIRING_FILE, {});
 
 let mainWindow = null;
 let scanning = false;
@@ -84,14 +90,14 @@ function newBookId(book, newSourceDir, newTrackPaths) {
 }
 
 /**
- * Carries progress, bookmarks, normalization gain, metadata overrides, and a
- * transcript over from one book id to another — needed whenever a
- * reorganize (or its undo) changes a book's id out from under data that was
- * keyed by the old one.
+ * Carries progress, bookmarks, normalization gain, metadata overrides,
+ * ebook pairing, and a transcript over from one book id to another — needed
+ * whenever a reorganize (or its undo) changes a book's id out from under
+ * data that was keyed by the old one.
  */
 function remapIdKeyedStores(oldId, newId) {
   if (oldId === newId) return;
-  for (const store of [progressStore, bookmarksStore, normalizationStore, metadataStore]) {
+  for (const store of [progressStore, bookmarksStore, normalizationStore, metadataStore, pairingStore]) {
     const data = store.get();
     if (Object.prototype.hasOwnProperty.call(data, oldId)) {
       const next = { ...data };
@@ -207,6 +213,10 @@ function toClientBook(book) {
     // before this field existed, which is already the correct "fully
     // detailed" reading for a pre-existing library.
     detailPending: Boolean(book.detailPending),
+    // Powers the "Has ebook" library filter/card badge — see runPairingFill()
+    // and ebook-pairing.js. Undefined (falsy) until the background pairing
+    // fill or an on-demand Read Along check has actually looked.
+    hasEbook: pairingStore.get()[book.id]?.status === 'matched',
   };
 }
 
@@ -692,9 +702,89 @@ function runDetailFill() {
   return detailFillPromise;
 }
 
+function getPairingEntry(bookId) {
+  return pairingStore.get()[bookId] ?? null;
+}
+
+/** Persists a pairing (or no-match) result for one book, unless it was removed/reorganized to a new id while the check was in flight. */
+function writePairingResult(bookId, result) {
+  if (!libraryStore.get().books.some((b) => b.id === bookId)) return false;
+  pairingStore.set({
+    ...pairingStore.get(),
+    [bookId]: { status: result.status, epubPath: result.epubPath, source: result.status === 'matched' ? 'auto' : null },
+  });
+  return true;
+}
+
+let pairingFillRunning = false;
+let pairingFillPromise = Promise.resolve();
+let pairingFillCancelToken = { cancelled: false };
+
+async function stopPairingFill() {
+  pairingFillCancelToken.cancelled = true;
+  await pairingFillPromise;
+}
+
+/**
+ * Background pass powering the "Has ebook" library filter/card badge:
+ * computes and persists an ebook-pairing result (matched, ambiguous, or
+ * none — see ebook-pairing.js) for every book that hasn't been checked yet.
+ * Deliberately chained to run only *after* runDetailFill() finishes, not
+ * concurrently with it — both are gentle, low-priority disk work on the
+ * same drive (see BOOK_CONCURRENCY's comment in library.js on why that
+ * matters here), and fully sequential (one book at a time) for the same
+ * reason, since this can touch every book in the library rather than just
+ * the ones a user happens to open.
+ */
+function runPairingFill() {
+  if (pairingFillRunning) return pairingFillPromise;
+  const books = libraryStore.get().books;
+  const pairings = pairingStore.get();
+  const unchecked = books.filter((b) => !(b.id in pairings));
+  if (!unchecked.length) return Promise.resolve();
+
+  pairingFillRunning = true;
+  pairingFillCancelToken = { cancelled: false };
+  const token = pairingFillCancelToken;
+  let done = 0;
+  let batch = [];
+  let lastFlush = Date.now();
+
+  const flush = () => {
+    if (!batch.length) return;
+    const fresh = libraryStore.get().books;
+    const updated = batch.map((id) => fresh.find((b) => b.id === id)).filter(Boolean).map(toClientBook);
+    if (updated.length) mainWindow?.webContents.send('library:booksUpdated', updated);
+    batch = [];
+    lastFlush = Date.now();
+  };
+
+  mainWindow?.webContents.send('library:pairingProgress', { done, total: unchecked.length, active: true });
+
+  pairingFillPromise = (async () => {
+    for (const book of unchecked) {
+      if (token.cancelled) break;
+      // eslint-disable-next-line no-await-in-loop
+      const result = await ebookPairing.findPairing(book);
+      if (!writePairingResult(book.id, result)) continue;
+      done += 1;
+      batch.push(book.id);
+      if (batch.length >= 25 || Date.now() - lastFlush > 1000) flush();
+      mainWindow?.webContents.send('library:pairingProgress', { done, total: unchecked.length, active: true });
+    }
+  })().finally(() => {
+    flush();
+    pairingFillRunning = false;
+    mainWindow?.webContents.send('library:pairingProgress', { done, total: unchecked.length, active: false });
+  });
+
+  return pairingFillPromise;
+}
+
 async function runScan() {
   if (scanning) return;
   await stopDetailFill(); // phase 2 must fully quiesce before we read the cache snapshot below
+  await stopPairingFill();
   const state = libraryStore.get();
   if (!state.folders.length) {
     libraryStore.set({ ...state, books: [] });
@@ -718,7 +808,8 @@ async function runScan() {
     mainWindow?.webContents.send('library:scan-progress', { done: 0, total: 0, scanning: false });
     mainWindow?.webContents.send('library:changed', currentState());
     refreshJumpList(); // a removed/renamed book could be sitting in the list
-    runDetailFill(); // background phase 2 for whatever's still detailPending -- fire-and-forget
+    // Background phase 2, then ebook-pairing fill after it -- both fire-and-forget from here.
+    runDetailFill().then(() => runPairingFill());
   }
 }
 
@@ -1065,6 +1156,75 @@ function registerIpc() {
     if (typeof bookId === 'string') transcriber.deleteTranscript(bookId);
   });
 
+  /**
+   * Returns the book's current ebook-pairing check if one exists (whether
+   * matched, ambiguous, or none — any of those means it's already been
+   * checked); otherwise computes and persists a fresh one. Unlike
+   * reorganize:plan (a preview of a destructive action needing explicit
+   * confirm), a pairing guess is harmless and fully reversible via a manual
+   * re-pick at any time, so the result is always persisted immediately
+   * rather than needing a separate commit step — this is also what lets the
+   * background runPairingFill() pass (main.js) know which books it's
+   * already covered.
+   */
+  ipcMain.handle('ebook:findPairing', async (_event, bookId) => {
+    if (typeof bookId !== 'string') return { status: 'none', epubPath: null, candidates: [] };
+    const existing = getPairingEntry(bookId);
+    if (existing) return { status: existing.status, epubPath: existing.epubPath, source: existing.source, candidates: [] };
+
+    const book = libraryStore.get().books.find((b) => b.id === bookId);
+    if (!book) return { status: 'none', epubPath: null, candidates: [] };
+
+    const result = await ebookPairing.findPairing(book);
+    writePairingResult(bookId, result);
+    mainWindow?.webContents.send('library:booksUpdated', [toClientBook(book)]); // hasEbook may have just changed
+    return result;
+  });
+
+  /** The user's explicit pick (or explicit "no ebook" clear) — always wins over future auto-guesses. */
+  ipcMain.handle('ebook:setPairing', (_event, { bookId, epubPath } = {}) => {
+    if (typeof bookId !== 'string') return { ok: false };
+    const matched = typeof epubPath === 'string' && epubPath;
+    const entry = { status: matched ? 'matched' : 'none', epubPath: matched ? epubPath : null, source: 'manual' };
+    pairingStore.set({ ...pairingStore.get(), [bookId]: entry });
+
+    const book = libraryStore.get().books.find((b) => b.id === bookId);
+    if (book) mainWindow?.webContents.send('library:booksUpdated', [toClientBook(book)]);
+    return { ok: true, pairing: entry };
+  });
+
+  ipcMain.handle('ebook:pickFile', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Choose the matching ebook',
+      properties: ['openFile'],
+      filters: [{ name: 'EPUB', extensions: ['epub'] }],
+    });
+    if (result.canceled || !result.filePaths.length) return { canceled: true };
+    return { canceled: false, epubPath: result.filePaths[0] };
+  });
+
+  ipcMain.handle('ebook:getToc', async (_event, bookId) => {
+    if (typeof bookId !== 'string') return { error: 'Invalid book.' };
+    const entry = getPairingEntry(bookId);
+    if (entry?.status !== 'matched') return { error: 'No ebook paired with this book yet.' };
+    try {
+      return { toc: await epub.readEpubToc(entry.epubPath) };
+    } catch (err) {
+      return { error: `Couldn't read this ebook — ${err.message}` };
+    }
+  });
+
+  ipcMain.handle('ebook:getSpineHtml', async (_event, { bookId, spineHref } = {}) => {
+    if (typeof bookId !== 'string' || typeof spineHref !== 'string') return { error: 'Invalid request.' };
+    const entry = getPairingEntry(bookId);
+    if (entry?.status !== 'matched') return { error: 'No ebook paired with this book yet.' };
+    try {
+      return { html: await epub.readEpubSpineHtml(entry.epubPath, spineHref) };
+    } catch (err) {
+      return { error: `Couldn't read this ebook — ${err.message}` };
+    }
+  });
+
   /** Lightweight book shape for the duplicates view — not the full toClientBook (no chapters needed). */
   function toDupeSummary(book) {
     return {
@@ -1314,6 +1474,7 @@ app.on('before-quit', () => {
   bookmarksStore.flushSync();
   normalizationStore.flushSync();
   metadataStore.flushSync();
+  pairingStore.flushSync();
   // Best-effort, not awaited — the RPC pipe closing when this process exits
   // cleans up on Discord's side regardless, so this isn't worth delaying quit for.
   discord.shutdown();

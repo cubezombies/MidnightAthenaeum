@@ -35,6 +35,11 @@ const el = {
   searchTranscriptBtn: $('searchTranscriptBtn'), captionsBtn: $('captionsBtn'),
   deleteTranscriptBtn: $('deleteTranscriptBtn'), transcribeStatus: $('transcribeStatus'),
   captionsBar: $('captionsBar'),
+  readAlongBtn: $('readAlongBtn'), readAlongPanel: $('readAlongPanel'), readAlongTitle: $('readAlongTitle'),
+  readAlongChangeBtn: $('readAlongChangeBtn'), readAlongCloseBtn: $('readAlongCloseBtn'),
+  readAlongNav: $('readAlongNav'), readAlongPrevBtn: $('readAlongPrevBtn'),
+  readAlongChapterSelect: $('readAlongChapterSelect'), readAlongNextBtn: $('readAlongNextBtn'),
+  readAlongStatus: $('readAlongStatus'), readAlongText: $('readAlongText'),
   transcriptModal: $('transcriptModal'), transcriptModalClose: $('transcriptModalClose'),
   transcriptSearchForm: $('transcriptSearchForm'), transcriptQuery: $('transcriptQuery'),
   transcriptStatus: $('transcriptStatus'), transcriptResults: $('transcriptResults'),
@@ -150,6 +155,20 @@ const state = {
   duplicateReports: [], // last result from duplicates:find, re-fetched after any removal
   // File > Reorganize by author…. phase: 'planning' | 'preview' | 'running' | 'done'.
   reorganize: { phase: 'planning', plan: null, result: null },
+  // Read along (paired ebook shown next to playback), always scoped to
+  // state.current (whichever book is open in book view) -- closes on
+  // navigating to a different book. tocCache/htmlCache mirror
+  // transcriptCache's shape/reasoning: parse-on-demand, cache for the
+  // session so re-opening the panel or navigating chapters doesn't re-fetch.
+  readAlong: {
+    open: false,
+    pairing: null,       // { status, epubPath, source } from the last findEbookPairing/setEbookPairing call
+    chapterIndex: -1,
+    manualOverride: false, // true once the user manually navigates -- blocks auto-advance until a different book is opened
+    highlightedParagraphIndex: -1, // best-effort "currently narrated" paragraph estimate -- see updateReadAlongProgress
+  },
+  readAlongTocCache: new Map(),  // bookId -> toc | null
+  readAlongHtmlCache: new Map(), // "bookId::spineHref" -> html string
 };
 
 let gridObserver = null;
@@ -349,6 +368,13 @@ function buildCard(book, { badge, delegate } = {}) {
     n.textContent = 'NEW';
     art.append(n);
   }
+  if (book.hasEbook) {
+    const eb = document.createElement('div');
+    eb.className = 'ebook-badge';
+    eb.title = 'Ebook available — Read along from the book view';
+    eb.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-book-open"></use></svg>';
+    art.append(eb);
+  }
   if (pct > 0) {
     const bar = document.createElement('div');
     bar.className = 'card-bar';
@@ -405,6 +431,7 @@ function matchesFilter(book) {
     case 'progress': return bookStatus(book.id) === 'progress';
     case 'finished': return bookStatus(book.id) === 'finished';
     case 'new': return bookStatus(book.id) === 'new';
+    case 'ebook': return Boolean(book.hasEbook);
     default: return true;
   }
 }
@@ -772,6 +799,8 @@ function openBook(bookId) {
   updateFinishedButton(book);
   updateMetadataUI(book);
   updateTranscribeUI(book);
+  closeReadAlong(); // scoped to whichever book is open -- don't carry the previous book's panel over
+  updateReadAlongButton(book);
   loadIntoPlayer(book);
 
   // Cover/chapters weren't scanned yet (see library.js's two-phase scan) —
@@ -1498,7 +1527,9 @@ function updateTimeUI() {
         state.playingChapterIndex = idx;
         if (navigator.mediaSession?.metadata) navigator.mediaSession.metadata.album = `${prefix}. ${ch.title}`;
         pushDiscordActivity();
+        updateReadAlong(idx);
       }
+      updateReadAlongProgress(idx, position);
     }
   }
 
@@ -2229,6 +2260,285 @@ el.transcriptModalClose.addEventListener('click', closeTranscriptModal);
 el.transcriptModal.addEventListener('click', (e) => {
   if (e.target === el.transcriptModal) closeTranscriptModal();
 });
+
+/* ----------------
+ * Read along (book view "Read along" button) — pairs an EPUB with its
+ * audiobook (src/main/ebook-pairing.js) and shows the matching chapter's
+ * text in a side panel (src/main/epub.js does the parsing). Auto-advance is
+ * best-effort: title-string similarity between an audio chapter and an ebook
+ * chapter is close to worthless (audiobook chapters are frequently just
+ * "Track 01" with no real title), so confidence instead comes from ordinal
+ * correspondence (same chapter count -> direct index mapping) or
+ * proportional position (different counts -> a weaker signal); when neither
+ * is strong, or the user has manually navigated, the panel stays put rather
+ * than jumping to a guess.
+ * ---------------- */
+
+const readAlongTocFetchesInFlight = new Map(); // bookId -> Promise, same de-dupe shape as ensureTranscriptLoaded above
+function ensureReadAlongToc(bookId) {
+  if (state.readAlongTocCache.has(bookId)) return Promise.resolve(state.readAlongTocCache.get(bookId));
+  if (readAlongTocFetchesInFlight.has(bookId)) return readAlongTocFetchesInFlight.get(bookId);
+
+  const promise = window.api.getEbookToc(bookId).then((result) => {
+    const toc = result?.toc ?? null;
+    state.readAlongTocCache.set(bookId, toc);
+    readAlongTocFetchesInFlight.delete(bookId);
+    return toc;
+  });
+  readAlongTocFetchesInFlight.set(bookId, promise);
+  return promise;
+}
+
+async function fetchSpineHtml(bookId, spineHref) {
+  const key = `${bookId}::${spineHref}`;
+  if (state.readAlongHtmlCache.has(key)) return state.readAlongHtmlCache.get(key);
+  const result = await window.api.getEbookSpineHtml({ bookId, spineHref });
+  const html = result?.html ?? null;
+  state.readAlongHtmlCache.set(key, html);
+  return html;
+}
+
+function findAnchorElement(doc, anchor) {
+  return doc.getElementById(anchor) || doc.querySelector(`[name="${CSS.escape(anchor)}"]`);
+}
+
+/**
+ * A spine file can hold more than one chapter — an EPUB TOC entry can be a
+ * #fragment anchor partway through a file (see epub.js) — so this finds the
+ * start/end anchor elements in the parsed DOM and only walks elements
+ * between them, rather than always returning the whole file's text.
+ *
+ * Parsed as 'text/html', not 'application/xhtml+xml': real-world epub prose
+ * occasionally has an unescaped `&` or a malformed self-closing tag, which
+ * strict XHTML parsing throws on; text/html is what every browser actually
+ * uses to render real epub content in the wild and is far more forgiving.
+ */
+function extractParagraphs(html, startAnchor, endAnchor) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const startEl = startAnchor ? findAnchorElement(doc, startAnchor) : null;
+  const endEl = endAnchor ? findAnchorElement(doc, endAnchor) : null;
+  const isBefore = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  let nodes = [...doc.body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, blockquote, li')];
+  if (startEl) nodes = nodes.filter((n) => n === startEl || isBefore(startEl, n));
+  if (endEl) nodes = nodes.filter((n) => n !== endEl && !isBefore(endEl, n));
+
+  const paragraphs = nodes.map((n) => n.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (paragraphs.length) return paragraphs;
+
+  // No <p>-like elements found (unusual markup) — fall back to the whole
+  // body's text rather than showing nothing.
+  const whole = doc.body.textContent.replace(/\s+/g, ' ').trim();
+  return whole ? [whole] : [];
+}
+
+/** Checks pairing status and updates the book-view button's label — called once per book, on open. */
+async function updateReadAlongButton(book) {
+  el.readAlongBtn.textContent = 'Read along';
+  el.readAlongBtn.disabled = true;
+  const result = await window.api.findEbookPairing(book.id);
+  if (state.current?.id !== book.id) return; // navigated away while this was in flight
+  state.readAlong.pairing = result;
+  el.readAlongBtn.disabled = false;
+  el.readAlongBtn.textContent = result.status === 'matched' ? 'Read along' : 'Pair ebook…';
+}
+
+function closeReadAlong() {
+  state.readAlong.open = false;
+  state.readAlong.chapterIndex = -1;
+  state.readAlong.manualOverride = false;
+  state.readAlong.highlightedParagraphIndex = -1;
+  el.readAlongPanel.classList.add('hidden');
+}
+
+/** Opens the native file picker and persists the choice; returns true once a pairing is ready to show. */
+async function pickAndPairEbook(book) {
+  const picked = await window.api.pickEbookFile();
+  if (picked.canceled) return false;
+  const result = await window.api.setEbookPairing({ bookId: book.id, epubPath: picked.epubPath });
+  if (!result.ok) {
+    showToast('Could not pair that ebook.');
+    return false;
+  }
+  state.readAlong.pairing = { status: 'matched', epubPath: result.pairing.epubPath, source: 'manual' };
+  state.readAlongTocCache.delete(book.id); // a re-pick invalidates whatever was cached for the old epub
+  return true;
+}
+
+async function loadReadAlongToc(book) {
+  el.readAlongNav.classList.add('hidden');
+  el.readAlongChangeBtn.classList.remove('hidden');
+  el.readAlongStatus.textContent = 'Loading…';
+  el.readAlongText.replaceChildren();
+
+  const toc = await ensureReadAlongToc(book.id);
+  if (state.current?.id !== book.id || !state.readAlong.open) return; // navigated or closed while loading
+
+  if (!toc || !toc.chapters.length) {
+    el.readAlongStatus.textContent = "Couldn't read this ebook.";
+    return;
+  }
+  el.readAlongStatus.textContent = '';
+  el.readAlongNav.classList.remove('hidden');
+  el.readAlongChapterSelect.replaceChildren(...toc.chapters.map((ch, i) => {
+    const opt = document.createElement('option');
+    opt.value = String(i);
+    opt.textContent = `${i + 1}. ${ch.title}`;
+    return opt;
+  }));
+
+  const startIndex = state.readAlong.chapterIndex >= 0 && state.readAlong.chapterIndex < toc.chapters.length
+    ? state.readAlong.chapterIndex : 0;
+  await showReadAlongChapter(book.id, startIndex);
+}
+
+async function showReadAlongChapter(bookId, index) {
+  const toc = state.readAlongTocCache.get(bookId);
+  if (!toc || index < 0 || index >= toc.chapters.length) return;
+
+  state.readAlong.chapterIndex = index;
+  state.readAlong.highlightedParagraphIndex = -1; // new chapter's content -- last chapter's estimate no longer applies
+  el.readAlongChapterSelect.value = String(index);
+  el.readAlongPrevBtn.disabled = index === 0;
+  el.readAlongNextBtn.disabled = index === toc.chapters.length - 1;
+  el.readAlongText.replaceChildren();
+  el.readAlongStatus.textContent = 'Loading…';
+
+  const chapter = toc.chapters[index];
+  const nextSameFile = toc.chapters[index + 1]?.spineHref === chapter.spineHref ? toc.chapters[index + 1] : null;
+
+  const html = await fetchSpineHtml(bookId, chapter.spineHref);
+  if (state.current?.id !== bookId || state.readAlong.chapterIndex !== index) return; // stale response
+
+  if (!html) {
+    el.readAlongStatus.textContent = "Couldn't read this chapter.";
+    return;
+  }
+  el.readAlongStatus.textContent = '';
+
+  const frag = document.createDocumentFragment();
+  for (const text of extractParagraphs(html, chapter.anchorId, nextSameFile?.anchorId ?? null)) {
+    const p = document.createElement('p');
+    p.textContent = text;
+    frag.append(p);
+  }
+  el.readAlongText.append(frag);
+  el.readAlongText.scrollTop = 0;
+}
+
+async function openReadAlong() {
+  const book = state.current;
+  if (!book) return;
+
+  if (state.readAlong.pairing?.status !== 'matched') {
+    const picked = await pickAndPairEbook(book);
+    if (!picked) return;
+    el.readAlongBtn.textContent = 'Read along';
+  }
+
+  state.readAlong.open = true;
+  state.readAlong.manualOverride = false;
+  el.readAlongPanel.classList.remove('hidden');
+  el.readAlongTitle.textContent = book.title;
+  await loadReadAlongToc(book);
+}
+
+el.readAlongBtn.addEventListener('click', () => {
+  if (state.current) openReadAlong();
+});
+el.readAlongChangeBtn.addEventListener('click', async () => {
+  const book = state.current;
+  if (!book) return;
+  if (await pickAndPairEbook(book)) await loadReadAlongToc(book);
+});
+el.readAlongCloseBtn.addEventListener('click', closeReadAlong);
+el.readAlongChapterSelect.addEventListener('change', () => {
+  if (!state.current) return;
+  state.readAlong.manualOverride = true;
+  showReadAlongChapter(state.current.id, Number(el.readAlongChapterSelect.value));
+});
+el.readAlongPrevBtn.addEventListener('click', () => {
+  if (!state.current) return;
+  state.readAlong.manualOverride = true;
+  showReadAlongChapter(state.current.id, state.readAlong.chapterIndex - 1);
+});
+el.readAlongNextBtn.addEventListener('click', () => {
+  if (!state.current) return;
+  state.readAlong.manualOverride = true;
+  showReadAlongChapter(state.current.id, state.readAlong.chapterIndex + 1);
+});
+
+/**
+ * Which ebook chapter corresponds to a given audio chapter, when confident:
+ * direct index mapping if both lists are the same length, otherwise
+ * proportional position as a weaker signal. Shared by the chapter-level
+ * auto-advance and the within-chapter paragraph estimate below, so the two
+ * always agree on what "in sync" means.
+ */
+function matchingEpubChapterIndex(book, toc, audioChapterIdx) {
+  const audioTotal = book.chapters.length;
+  const epubTotal = toc.chapters.length;
+  if (!audioTotal || !epubTotal) return -1;
+  return Math.max(0, Math.min(
+    epubTotal - 1,
+    audioTotal === epubTotal ? audioChapterIdx : Math.round((audioChapterIdx / audioTotal) * epubTotal),
+  ));
+}
+
+/**
+ * Auto-advances the read-along panel to the ebook chapter matching the
+ * audio's current chapter, when confident — called from updateTimeUI()
+ * alongside the existing chapter-tracking, same "only touch the DOM when it
+ * actually changes" shape as updateCaption(). See the section comment above
+ * for the confidence reasoning.
+ */
+function updateReadAlong(audioChapterIdx) {
+  if (!state.readAlong.open || state.readAlong.manualOverride) return;
+  if (state.current?.id !== state.playing?.id) return; // viewing a different book than the one playing
+  const book = state.playing;
+  const toc = state.readAlongTocCache.get(book.id);
+  if (!toc || !toc.chapters.length) return;
+
+  const target = matchingEpubChapterIndex(book, toc, audioChapterIdx);
+  if (target === -1 || target === state.readAlong.chapterIndex) return;
+  showReadAlongChapter(book.id, target);
+}
+
+/**
+ * Best-effort estimate of which paragraph is currently being narrated,
+ * within whichever chapter the panel is already confidently showing (see
+ * matchingEpubChapterIndex) — not real synced highlighting (that needs the
+ * Whisper transcript aligned to text, out of scope here), just proportional
+ * position within the current audio chapter's time range mapped onto the
+ * ebook chapter's paragraph count. Assumes roughly steady narration pace
+ * within a chapter, which is a reasonable approximation, not a guarantee —
+ * called every updateTimeUI() tick, so kept cheap and only touches the DOM
+ * when the estimated paragraph actually changes.
+ */
+function updateReadAlongProgress(audioChapterIdx, position) {
+  if (!state.readAlong.open || state.readAlong.manualOverride) return;
+  if (state.current?.id !== state.playing?.id) return;
+  const book = state.playing;
+  const toc = state.readAlongTocCache.get(book.id);
+  if (!toc || !toc.chapters.length) return;
+  if (matchingEpubChapterIndex(book, toc, audioChapterIdx) !== state.readAlong.chapterIndex) return;
+
+  const audioChapter = book.chapters[audioChapterIdx];
+  if (!audioChapter || !(audioChapter.end > audioChapter.start)) return;
+  const progress = Math.max(0, Math.min(1, (position - audioChapter.start) / (audioChapter.end - audioChapter.start)));
+
+  const paragraphs = el.readAlongText.children;
+  if (!paragraphs.length) return;
+  const target = Math.min(paragraphs.length - 1, Math.floor(progress * paragraphs.length));
+  if (target === state.readAlong.highlightedParagraphIndex) return;
+
+  if (state.readAlong.highlightedParagraphIndex >= 0) {
+    paragraphs[state.readAlong.highlightedParagraphIndex]?.classList.remove('read-along-current');
+  }
+  paragraphs[target].classList.add('read-along-current');
+  paragraphs[target].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  state.readAlong.highlightedParagraphIndex = target;
+}
 el.transcriptModal.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { e.stopPropagation(); closeTranscriptModal(); }
 });
@@ -2852,10 +3162,13 @@ window.api.onBooksUpdated(patchBooks);
 window.api.onLibraryChanged(applyState);
 // Two independent progress sources share one status line: a foreground scan
 // (phase 1) always wins the text while it's running; a background detail
-// fill (phase 2 — cover/chapters, see library.js) shows once phase 1 isn't
-// active, so a long backlog is visible instead of silent.
+// fill (phase 2 — cover/chapters, see library.js) shows next, then ebook
+// pairing (runPairingFill, main.js — chained to run only after detail fill,
+// so the two never overlap) — so a long backlog on either is visible
+// instead of silent.
 let lastScanProgress = { done: 0, total: 0, scanning: false };
 let lastDetailProgress = { done: 0, total: 0, active: false };
+let lastPairingProgress = { done: 0, total: 0, active: false };
 
 function renderScanStatus() {
   if (lastScanProgress.scanning) {
@@ -2864,6 +3177,8 @@ function renderScanStatus() {
       : 'Scanning…';
   } else if (lastDetailProgress.active) {
     el.scanStatus.textContent = `Filling in covers & chapters: ${lastDetailProgress.done}/${lastDetailProgress.total}…`;
+  } else if (lastPairingProgress.active) {
+    el.scanStatus.textContent = `Checking for matching ebooks: ${lastPairingProgress.done}/${lastPairingProgress.total}…`;
   } else {
     el.scanStatus.textContent = '';
   }
@@ -2880,6 +3195,10 @@ window.api.onScanProgress(({ done, total, scanning }) => {
 });
 window.api.onDetailProgress(({ done, total, active }) => {
   lastDetailProgress = { done, total, active };
+  renderScanStatus();
+});
+window.api.onPairingProgress(({ done, total, active }) => {
+  lastPairingProgress = { done, total, active };
   renderScanStatus();
 });
 

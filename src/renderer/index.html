@@ -157,6 +157,7 @@
           <button class="filter-tab" data-filter="progress" role="tab">In progress</button>
           <button class="filter-tab" data-filter="finished" role="tab">Finished</button>
           <button class="filter-tab" data-filter="new" role="tab">Not started</button>
+          <button class="filter-tab" data-filter="ebook" role="tab">Has ebook</button>
         </div>
         <div class="toolbar-right">
           <span id="filterCount" class="filter-count muted small"></span>
@@ -202,6 +203,7 @@
             <button id="deleteTranscriptBtn" class="icon-btn hidden" title="Delete transcript" aria-label="Delete transcript">
               <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
             </button>
+            <button id="readAlongBtn" class="btn btn-quiet">Read along</button>
           </div>
           <div id="transcribeStatus" class="muted small transcribe-status hidden"></div>
         </div>
@@ -444,6 +446,21 @@
       </div>
     </div>
   </div>
+
+  <aside id="readAlongPanel" class="read-along-panel hidden" aria-label="Read along">
+    <div class="read-along-header">
+      <h3 id="readAlongTitle">Read along</h3>
+      <button id="readAlongChangeBtn" class="btn btn-quiet small hidden">Change ebook…</button>
+      <button id="readAlongCloseBtn" class="icon-btn" aria-label="Close read along"><svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg></button>
+    </div>
+    <div id="readAlongNav" class="read-along-nav hidden">
+      <button id="readAlongPrevBtn" class="icon-btn" title="Previous chapter" aria-label="Previous chapter"><svg class="icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg></button>
+      <select id="readAlongChapterSelect" aria-label="Chapter"></select>
+      <button id="readAlongNextBtn" class="icon-btn read-along-next" title="Next chapter" aria-label="Next chapter"><svg class="icon" aria-hidden="true"><use href="#icon-chevron-left"></use></svg></button>
+    </div>
+    <div id="readAlongStatus" class="muted small read-along-status"></div>
+    <div id="readAlongText" class="read-along-text"></div>
+  </aside>
 
   <script src="app.js"></script>
 </body>

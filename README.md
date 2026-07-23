@@ -353,6 +353,30 @@ This is the highest-risk feature in the app, since a bug moves real files
 rather than just app data — consider **File → Backup data…** first if
 you'd like an extra safety net beyond the built-in undo.
 
+## Read along
+
+The **Read along** button in the book view pairs an EPUB with the audiobook
+you're viewing and shows its current chapter's text in a side panel while
+you listen. Pairing is automatic when it can be (matched by folder
+proximity — same folder, or an `epub`/`E-Books`-style subfolder next to it),
+falling back to a native file picker when it can't confidently guess; a
+background pass gradually checks the whole library this way, powering a
+**Has ebook** library filter and a small book-icon badge on matching cards.
+
+The panel auto-advances to the ebook chapter matching what's playing when
+it's confident — the audio and ebook have the same chapter count (direct
+mapping), or a weaker proportional-position signal when they don't — and
+never guesses when neither signal is strong; it just stays wherever you last
+navigated it, with manual chapter controls always available regardless.
+Within a chapter, the paragraph nearest your position gets a soft highlight,
+estimated from how far through the audio chapter you are — a genuinely
+useful approximation, not real synced highlighting (that would need the
+Whisper transcript aligned to text, a bigger future project).
+
+Scoped to EPUB only for now — MOBI is a proprietary format Amazon itself
+deprecated in 2021, and PDF has no reliable chapter structure, so both would
+take considerably more work for considerably less reliable results.
+
 ## Keyboard
 
 | Key | Action |
