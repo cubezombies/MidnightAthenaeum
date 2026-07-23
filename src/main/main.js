@@ -197,14 +197,6 @@ function createWindow() {
     title: 'Midnight Athenaeum',
     icon: path.join(__dirname, '..', '..', 'build', 'icon.ico'),
     show: false,
-    // Hides the plain OS title bar in favor of the app's own themed topbar
-    // acting as the drag region (see .brand's -webkit-app-region: drag in
-    // styles.css), while titleBarOverlay keeps Windows' own native
-    // minimize/maximize/close buttons — including Windows 11's snap-layout
-    // hover menu on maximize — instead of building (and risking getting
-    // wrong) custom replacements for them.
-    titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#12121a', symbolColor: '#ececf2', height: 56 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -874,18 +866,6 @@ function registerIpc() {
   // pause) stays in sync — Windows has no way to ask the window for this.
   ipcMain.handle('player:setPlayingState', (_event, isPlaying) => {
     taskbar.setThumbar(mainWindow, Boolean(isPlaying), sendMediaControl);
-  });
-
-  // Keeps the native titlebar-overlay buttons (min/max/close, drawn by
-  // Windows itself — see titleBarOverlay above) matching the app's current
-  // light/dark theme, since that's set purely in the renderer and Windows
-  // has no way to know about it otherwise.
-  ipcMain.handle('window:setOverlayTheme', (_event, isDark) => {
-    mainWindow?.setTitleBarOverlay({
-      color: isDark ? '#12121a' : '#ffffff',
-      symbolColor: isDark ? '#ececf2' : '#1b1b26',
-      height: 56,
-    });
   });
 }
 

@@ -82,29 +82,21 @@ body {
 .small { font-size: 12px; }
 
 /* ---------- Topbar ---------- */
-/* Doubles as the window's titlebar (main.js sets titleBarStyle: 'hidden') —
-   .brand is the drag handle; everything interactive stays clickable since
-   -webkit-app-region: drag is opt-in per-element, not inherited by children,
-   so nothing else here needs an explicit no-drag override. The extra right
-   padding leaves room for Windows' own native min/max/close buttons, drawn
-   on top of the page via titleBarOverlay rather than by this app. */
 .topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 150px 12px 20px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--line);
   background: var(--bg-elev);
   flex-shrink: 0;
-  -webkit-app-region: drag;
 }
 
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brand h1 { font-size: 17px; margin: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#backBtn { -webkit-app-region: no-drag; }
 
-.topbar-actions { display: flex; align-items: center; gap: 10px; -webkit-app-region: no-drag; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
 
 .scan-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
 

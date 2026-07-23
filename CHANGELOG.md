@@ -8,6 +8,17 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-07-22
+### Fixed
+- **Critical**: the app hung on startup, never showing a window. Cause:
+  0.4.6's themed titlebar (`titleBarStyle: 'hidden'` + `titleBarOverlay`)
+  broke window creation — this was the one change in 0.4.6 flagged as
+  needing real-world verification, since it can't be tested in a sandboxed
+  dev environment, and it turned out to be broken. Reverted back to the
+  standard native title bar; everything else from 0.4.6 (icons, progress
+  bar, focus states, layout fixes) is unaffected and stays in place. No
+  data was at risk — this was purely a window-chrome regression.
+
 ## [0.4.6] - 2026-07-22
 ### Added
 - A real SVG icon set replacing every emoji/Unicode-symbol icon in the app

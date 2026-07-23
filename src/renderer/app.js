@@ -2218,13 +2218,8 @@ function effectiveTheme() {
 }
 
 function updateThemeButton() {
-  const dark = effectiveTheme() === 'dark';
   // Show the sun in dark mode (click for light) and the moon in light mode.
-  el.themeIcon.setAttribute('href', dark ? '#icon-sun' : '#icon-moon');
-  // The min/max/close buttons in the titlebar are drawn natively by Windows
-  // (see titleBarOverlay in main.js) — they don't pick up the page's own
-  // theme automatically, so push it over explicitly.
-  window.api.setOverlayTheme(dark);
+  el.themeIcon.setAttribute('href', effectiveTheme() === 'dark' ? '#icon-sun' : '#icon-moon');
 }
 
 function toggleTheme() {

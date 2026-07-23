@@ -1,7 +1,7 @@
 {
   "name": "midnight-athenaeum",
   "productName": "Midnight Athenaeum",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Midnight Athenaeum — a desktop audiobook player with m4b chapter support and a sleep timer",
   "main": "src/main/main.js",
   "author": "cubezombies",

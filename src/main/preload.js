@@ -43,7 +43,6 @@ contextBridge.exposeInMainWorld('api', {
   installUpdate: () => ipcRenderer.invoke('updates:install'),
   getInitialOpenBook: () => ipcRenderer.invoke('app:getInitialOpenBook'),
   setPlayingState: (isPlaying) => ipcRenderer.invoke('player:setPlayingState', isPlaying),
-  setOverlayTheme: (isDark) => ipcRenderer.invoke('window:setOverlayTheme', isDark),
 
   onLibraryChanged: (cb) => {
     const listener = (_event, state) => cb(state);
