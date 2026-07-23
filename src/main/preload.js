@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('api', {
   installUpdate: () => ipcRenderer.invoke('updates:install'),
   getInitialOpenBook: () => ipcRenderer.invoke('app:getInitialOpenBook'),
   setPlayingState: (isPlaying) => ipcRenderer.invoke('player:setPlayingState', isPlaying),
+  setDiscordPresenceEnabled: (enabled) => ipcRenderer.invoke('discord:setEnabled', enabled),
+  updateDiscordActivity: (info) => ipcRenderer.invoke('discord:updateActivity', info),
 
   onLibraryChanged: (cb) => {
     const listener = (_event, state) => cb(state);

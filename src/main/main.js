@@ -45,6 +45,7 @@ const { registerScheme, registerMediaProtocol, mediaUrl } = require('./media-pro
 const { searchOpenLibrary, fetchWorkDescription, downloadCover } = require('./metadata-lookup');
 const updater = require('./updater');
 const taskbar = require('./taskbar');
+const discord = require('./discord-presence');
 
 registerScheme();
 
@@ -867,6 +868,11 @@ function registerIpc() {
   ipcMain.handle('player:setPlayingState', (_event, isPlaying) => {
     taskbar.setThumbar(mainWindow, Boolean(isPlaying), sendMediaControl);
   });
+
+  // Discord Rich Presence — opt-in (see the topbar toggle), and a no-op if
+  // Discord isn't running or no client ID is configured (see discord-presence.js).
+  ipcMain.handle('discord:setEnabled', (_event, value) => discord.setEnabled(value));
+  ipcMain.handle('discord:updateActivity', (_event, info) => discord.setActivity(info ?? {}));
 }
 
 /**
@@ -932,4 +938,7 @@ app.on('before-quit', () => {
   bookmarksStore.flushSync();
   normalizationStore.flushSync();
   metadataStore.flushSync();
+  // Best-effort, not awaited — the RPC pipe closing when this process exits
+  // cleans up on Discord's side regardless, so this isn't worth delaying quit for.
+  discord.shutdown();
 });

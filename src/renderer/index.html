@@ -79,6 +79,11 @@
       <line x1="12" y1="3" x2="12" y2="21"/><line x1="5" y1="7" x2="19" y2="7"/>
       <path d="M5 7l-3 6a3 3 0 0 0 6 0z"/><path d="M19 7l-3 6a3 3 0 0 0 6 0z"/>
     </symbol>
+    <symbol id="icon-broadcast" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="2"/>
+      <path d="M8.5 8.5a5 5 0 0 0 0 7"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/>
+      <path d="M5.5 5.5a9 9 0 0 0 0 13"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>
+    </symbol>
   </svg>
 
   <header class="topbar">
@@ -94,6 +99,9 @@
       </button>
       <button id="updatesBtn" class="icon-btn updates-btn" title="Check for updates" aria-label="Check for updates">
         <svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg><span id="updatesDot" class="updates-dot hidden"></span>
+      </button>
+      <button id="discordBtn" class="icon-btn" title="Show what you're listening to on Discord" aria-label="Discord Rich Presence" aria-pressed="false">
+        <svg class="icon" aria-hidden="true"><use href="#icon-broadcast"></use></svg>
       </button>
       <button id="rescanBtn" class="btn">Rescan</button>
       <div class="extra folders">

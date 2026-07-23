@@ -31,7 +31,7 @@ const el = {
   metadataPreviewCover: $('metadataPreviewCover'), metadataPreviewTitle: $('metadataPreviewTitle'),
   metadataPreviewAuthor: $('metadataPreviewAuthor'), metadataPreviewDesc: $('metadataPreviewDesc'),
   metadataApplyBtn: $('metadataApplyBtn'), metadataBackBtn: $('metadataBackBtn'),
-  updatesBtn: $('updatesBtn'), updatesDot: $('updatesDot'),
+  updatesBtn: $('updatesBtn'), updatesDot: $('updatesDot'), discordBtn: $('discordBtn'),
   updatesModal: $('updatesModal'), updatesModalClose: $('updatesModalClose'),
   updatesCurrentVersion: $('updatesCurrentVersion'), updatesStatus: $('updatesStatus'),
   updatesProgressTrack: $('updatesProgressTrack'), updatesProgressFill: $('updatesProgressFill'),
@@ -101,6 +101,9 @@ const state = {
   norm: null,          // in-progress loudness measurement for the current book
   groupSeries: localStorage.getItem('groupSeries') === '1',
   onlineMetadataEnabled: localStorage.getItem('onlineMetadataEnabled') === '1',
+  // Off by default — reports what you're listening to externally, so it's
+  // opt-in like the online metadata lookup, not a launch-time default.
+  discordPresence: localStorage.getItem('discordPresence') === '1',
   metadataResults: [],   // last Open Library search results for the modal
   metadataPicked: null,  // the candidate currently shown in the preview pane
   appVersion: null,      // this build's version, fetched once from the main process
@@ -1307,6 +1310,25 @@ function setNormalize(on) {
   }
 }
 
+/** Sends the current playback snapshot to Discord Rich Presence, if enabled. */
+function pushDiscordActivity() {
+  if (!state.discordPresence || !state.playing) return;
+  window.api.updateDiscordActivity({
+    title: state.playing.title,
+    chapterLabel: el.nowChapter.textContent || '',
+    isPlaying: !el.audio.paused,
+  });
+}
+
+/** Turn Discord Rich Presence on/off. Off by default — see the state.discordPresence comment. */
+function setDiscordPresence(on) {
+  state.discordPresence = on;
+  localStorage.setItem('discordPresence', on ? '1' : '0');
+  el.discordBtn.setAttribute('aria-pressed', String(on));
+  window.api.setDiscordPresenceEnabled(on);
+  if (on) pushDiscordActivity();
+}
+
 /** How far to rewind on resume, based on how long playback was paused. */
 function resumeRewindSeconds(pausedMs) {
   const minutes = pausedMs / 60000;
@@ -1375,9 +1397,10 @@ function updateTimeUI() {
       const prefix = book.kind === 'multi' ? `${idx + 1}/${book.chapters.length}` : `${idx + 1}`;
       el.nowChapter.textContent = `${prefix}. ${ch.title}`;
       if (state.current?.id === book.id) highlightChapter(idx);
-      if (idx !== state.playingChapterIndex && navigator.mediaSession?.metadata) {
+      if (idx !== state.playingChapterIndex) {
         state.playingChapterIndex = idx;
-        navigator.mediaSession.metadata.album = `${prefix}. ${ch.title}`;
+        if (navigator.mediaSession?.metadata) navigator.mediaSession.metadata.album = `${prefix}. ${ch.title}`;
+        pushDiscordActivity();
       }
     }
   }
@@ -1602,6 +1625,7 @@ el.audio.addEventListener('play', () => {
   el.playBtn.setAttribute('aria-label', 'Pause');
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
   window.api.setPlayingState(true);
+  pushDiscordActivity();
 
   // A Web Audio graph can only be built during/after a user gesture; first play
   // is our chance. Resume it too — the context suspends when idle.
@@ -1628,6 +1652,7 @@ el.audio.addEventListener('pause', () => {
   el.playBtn.setAttribute('aria-label', 'Play');
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
   window.api.setPlayingState(false);
+  pushDiscordActivity();
   state.pausedAt = Date.now();
   flushProgress();
 });
@@ -1711,6 +1736,7 @@ el.sortSelect.addEventListener('change', () => {
 
 el.skipSilenceBtn.addEventListener('click', () => setSkipSilence(!state.skipSilence));
 el.normalizeBtn.addEventListener('click', () => setNormalize(!state.normalize));
+el.discordBtn.addEventListener('click', () => setDiscordPresence(!state.discordPresence));
 
 el.filterTabs.addEventListener('click', (e) => {
   const tab = e.target.closest('.filter-tab');
@@ -2242,6 +2268,11 @@ el.audio.crossOrigin = 'anonymous';
 el.audio.preservesPitch = true;
 el.skipSilenceBtn.setAttribute('aria-pressed', String(state.skipSilence));
 el.normalizeBtn.setAttribute('aria-pressed', String(state.normalize));
+el.discordBtn.setAttribute('aria-pressed', String(state.discordPresence));
+// The main process's enabled flag starts false regardless of what was
+// persisted last session — sync it once at startup rather than waiting for
+// the user to click the button again.
+window.api.setDiscordPresenceEnabled(state.discordPresence);
 
 /* ---------------- OS media integration ----------------
  * mediaSession action handlers are set once here rather than per-book — they

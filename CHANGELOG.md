@@ -8,6 +8,20 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-07-22
+### Added
+- **Discord Rich Presence** — shows "Listening to *The Way of Kings* — Ch.
+  12" on your Discord profile while a book plays, updating on chapter
+  changes and play/pause. Off by default (new topbar toggle) — this reports
+  what you're listening to externally, so it's opt-in like the online
+  metadata lookup, not a launch-time default. Entirely best-effort: with no
+  Discord client ID configured, or Discord not installed/running, every call
+  silently no-ops rather than surfacing an error — verified a stuck/failed
+  connection attempt is bounded to a few seconds internally rather than
+  hanging, since the underlying RPC library doesn't reliably fail fast on
+  its own. Needs a Discord Application ID to actually activate; inert until
+  one is configured.
+
 ## [0.4.8] - 2026-07-22
 ### Fixed
 - A large empty gap at the top of the window, introduced in 0.4.6. Cause:

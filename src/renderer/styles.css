@@ -434,9 +434,10 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 
 .no-bookmarks { color: var(--muted); padding: 8px 12px 4px; font-size: 13px; }
 
-/* ---------- Toggle buttons (skip-silence, normalize) ---------- */
+/* ---------- Toggle buttons (skip-silence, normalize, Discord presence) ---------- */
 .normalize-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
 .skipsil-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+#discordBtn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
 .skipsil-btn.skipping { animation: skipsil-pulse .8s ease-in-out infinite; }
 @keyframes skipsil-pulse {
   0%, 100% { transform: scale(1); }
