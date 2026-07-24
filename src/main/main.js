@@ -249,6 +249,25 @@ function currentState() {
   };
 }
 
+/**
+ * shell.openExternal hands a URL straight to the OS (ShellExecute on
+ * Windows) — restricting it to http/https before calling is cheap
+ * defense-in-depth against a window.open() call ever reaching it with a
+ * `file:`/custom-protocol URL (nothing in this app currently constructs one,
+ * but every use of this goes through a window-open handler that fires for
+ * any renderer-initiated navigation attempt, not just the trusted static
+ * links that use it today).
+ */
+function openExternalSafely(url) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return;
+  }
+  if (parsed.protocol === 'https:' || parsed.protocol === 'http:') shell.openExternal(url);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -272,9 +291,16 @@ function createWindow() {
 
   // Keep external links out of the app window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openExternalSafely(url);
     return { action: 'deny' };
   });
+
+  // This is a single-page app with no legitimate reason to ever navigate its
+  // main frame away from the file it loaded once at startup -- blocking it
+  // outright (rather than allowlisting) is extra defense-in-depth alongside
+  // CSP/setWindowOpenHandler against a hypothetical renderer compromise
+  // trying to load a different origin into the window.
+  mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
 
   // Electron ships no edit context menu by default — right-clicking a text
   // field does nothing unless the app builds one itself. Scoped to editable
@@ -321,9 +347,10 @@ function openAbout() {
     { query: { v: app.getVersion() } },
   );
   aboutWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openExternalSafely(url);
     return { action: 'deny' };
   });
+  aboutWindow.webContents.on('will-navigate', (event) => event.preventDefault());
   aboutWindow.on('closed', () => { aboutWindow = null; });
 }
 
@@ -1271,10 +1298,24 @@ function registerIpc() {
     return result;
   });
 
-  /** The user's explicit pick (or explicit "no ebook" clear) — always wins over future auto-guesses. */
+  /**
+   * The user's explicit pick (or explicit "no ebook" clear) — always wins
+   * over future auto-guesses. epubPath is only ever trusted if it's a real,
+   * existing .epub file (same filter ebook:pickFile's dialog already
+   * applies) — this is later read as a ZIP by epub.js on the main process's
+   * own filesystem access, so an unvalidated arbitrary path here would be a
+   * real (if renderer-compromise-gated) arbitrary-file-read primitive.
+   */
   ipcMain.handle('ebook:setPairing', (_event, { bookId, epubPath } = {}) => {
     if (typeof bookId !== 'string') return { ok: false };
-    const matched = typeof epubPath === 'string' && epubPath;
+    let matched = typeof epubPath === 'string' && epubPath && path.extname(epubPath).toLowerCase() === '.epub';
+    if (matched) {
+      try {
+        matched = fs.statSync(epubPath).isFile();
+      } catch {
+        matched = false;
+      }
+    }
     const entry = { status: matched ? 'matched' : 'none', epubPath: matched ? epubPath : null, source: 'manual' };
     pairingStore.set({ ...pairingStore.get(), [bookId]: entry });
 

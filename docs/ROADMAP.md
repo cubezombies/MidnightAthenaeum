@@ -709,6 +709,45 @@ boundaries.
 
 ---
 
+## Security & dependency maintenance
+
+Findings from a security pass (2026-07-24): repo-level hardening (GitHub
+secret scanning + push protection, a light-touch ruleset blocking
+force-push/deletion on `main`) and the Electron sandbox/CSP/preload
+configuration were already in good shape — `contextIsolation`/`sandbox`/
+`nodeIntegration: false` on both windows, a strict CSP (`script-src 'self'`,
+no `unsafe-inline`/`eval`) on every page, and `preload.js` exposing a
+closed, explicitly-enumerated API rather than a generic IPC passthrough.
+Three cheap renderer-hardening fixes and two deliberately-deferred dependency
+upgrades came out of that pass:
+
+### Deferred: Electron major-version bump
+Electron 34.5.8 (currently pinned) is the last 34.x patch release — no
+further security backports are coming to that line. `npm audit` lists
+several real CVEs against it (an ASAR integrity bypass, use-after-free bugs,
+an IPC response-spoofing issue, among others — see `npm audit` for the full,
+current list and advisory links). Fixing these needs a major-version jump
+(34 → 43 as of this writing), which changes the Node/Electron ABI that
+`@vscode/sqlite3` is compiled against — the native-module build was real,
+non-trivial work to get right (see "Move the library to SQLite" above) and
+would need its full verification gate re-run, not just a version bump and a
+hope. Deliberately deferred to its own dedicated pass rather than bundled
+into a general security cleanup.
+
+### Deferred: `jimp` major-version bump
+`npm audit` also flags a moderate DoS vulnerability (infinite loop on
+malformed input) in `file-type`, a transitive dependency via `jimp` (used
+for cover thumbnails — `generateCoverThumb` in `src/main/library.js` — and
+the build-time icon scripts). The fix is `jimp` 1.x, a breaking rewrite of
+the API this codebase's three call sites (`generateCoverThumb`,
+`scripts/make-icons.cjs`, `scripts/make-media-icons.cjs`) would all need
+re-verifying against. Lower urgency than the Electron CVEs — this app's
+usage is JPG/PNG cover art, not the ASF/WMA path the advisory is actually
+about — but real dependency debt worth its own pass rather than a blind
+`npm audit fix --force`.
+
+---
+
 ## Suggested sequencing
 
 A pragmatic order that front-loads visible value and unblocks later work:
