@@ -78,6 +78,61 @@ location, confirmed the installed app loads the real library over IPC exactly
 like the dev build, then uninstalled and confirmed the install directory,
 shortcuts, and registry entry were gone while the data folder was untouched.
 
+### Is this safe to install?
+
+The SmartScreen warning is purely about the missing code-signing certificate
+(one costs money on an ongoing basis; this is a free hobby project) — it's not
+a signal that anything was found wrong with the installer, and there's no
+Microsoft/AV review behind it either way. Judge it on what you can actually
+check instead:
+
+- **The source is all here.** Every line that ends up in the installer is in
+  this repo — nothing closed-source, no separate "pro" build. `src/main/`
+  is the entire main-process/IPC surface; there's no code path that isn't in
+  this tree.
+- **The installer is built in public, not on anyone's laptop.** Every release
+  is produced by [`.github/workflows/release.yml`](.github/workflows/release.yml),
+  a GitHub Actions job that checks out this exact tagged commit on a clean
+  `windows-latest` runner and runs `npm ci` + `electron-builder` — you can
+  open any release's **Actions** run and read the full build log. The only
+  credential involved is GitHub's own auto-generated, repo-scoped token, used
+  solely to attach the built files to the release; nothing else is injected
+  into the build.
+- **You can verify the file you downloaded matches what GitHub built**, rather
+  than trusting the download unverified — this checks it against the SHA-256
+  digest GitHub itself recorded for that exact asset when it was uploaded
+  (from the same folder as the downloaded installer):
+  ```powershell
+  $version = "<version>"   # e.g. "0.12.0"
+  $asset = "MidnightAthenaeum-Setup-$version.exe"
+  $expected = (Invoke-RestMethod "https://api.github.com/repos/cubezombies/MidnightAthenaeum/releases/tags/v$version").assets |
+    Where-Object name -eq $asset | Select-Object -ExpandProperty digest
+  $actual = "sha256:" + (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+  $actual -eq $expected
+  ```
+  should print `True`. Electron's own auto-updater does an equivalent check
+  (SHA-512 this time, from the release's `latest.yml`) automatically on every
+  in-app update — a corrupted or tampered download is rejected before it's
+  ever installed.
+- **No telemetry, no analytics, no background network calls.** The only
+  things that ever touch the network, and only when you explicitly trigger
+  them: **Check for Updates** (manual only, see below), the opt-in
+  [online metadata lookup](#online-metadata-lookup) (asks first, shows what
+  it sends), and opt-in Discord Rich Presence. Everything else — scanning,
+  playback, transcription — is entirely local; see
+  [Transcription & transcript search](#transcription--transcript-search) for
+  the offline-transcription specifics. `ab-media://`, the protocol audio and
+  covers are served over, validates every request against your actual
+  library folders rather than disabling Electron's `webSecurity` — it can't
+  be used to read files outside them (see [Layout](#layout)).
+- Standard GitHub repo protections are also on: secret scanning + push
+  protection, and a ruleset blocking force-pushes/deletion on `main`, so the
+  published history can't be silently rewritten.
+
+If you'd still rather not run an unsigned `.exe`, `npm start` from source (see
+[Running it](#running-it)) skips the installer/SmartScreen question entirely
+— you're running the exact same code either way.
+
 ### Checking for updates
 
 **Help → Check for Updates…** (or the ⬇ button in the top bar) checks GitHub
