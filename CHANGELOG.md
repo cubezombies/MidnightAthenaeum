@@ -8,6 +8,17 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-24
+### Changed
+- The library index moved from one monolithic `library.json` file to a real
+  SQLite database (`library.db`), migrated automatically on first launch of
+  this version — your old `library.json` is kept as `library.json.bak`, never
+  deleted. Rescans and detail fills now write only the rows that actually
+  changed instead of rewriting the whole file every time; on a 5,800+ book
+  library this cut a routine background write from a full-file rewrite down
+  to single-digit milliseconds. No visible change to search, sort, or
+  filtering — this is purely a storage change underneath.
+
 ## [0.10.0] - 2026-07-23
 ### Added
 - **Read along** — pairs an EPUB with its matching audiobook and shows the

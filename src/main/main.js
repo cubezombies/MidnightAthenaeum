@@ -7,7 +7,7 @@ const path = require('node:path');
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 
 const {
-  USER_DATA, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
+  USER_DATA, LIBRARY_FILE, LIBRARY_DB_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
   METADATA_FILE, DATA_ROOT, OS_DEFAULT_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, BACKUP_DIR,
   REORG_ID_MAP_FILE, EBOOK_PAIRING_FILE, setDataLocation, clearDataLocation,
 } = require('./paths');
@@ -40,6 +40,7 @@ app.setPath('userData', USER_DATA);
 app.setPath('sessionData', USER_DATA);
 
 const { JsonStore } = require('./store');
+const { LibraryDb } = require('./db');
 const library = require('./library');
 const { scanLibrary, hashId } = library;
 const { registerScheme, registerMediaProtocol, mediaUrl } = require('./media-protocol');
@@ -55,7 +56,7 @@ const ebookPairing = require('./ebook-pairing');
 
 registerScheme();
 
-const libraryStore = new JsonStore(LIBRARY_FILE, { folders: [], books: [] });
+const libraryStore = new LibraryDb(LIBRARY_DB_FILE);
 const progressStore = new JsonStore(PROGRESS_FILE, {});
 // { [bookId]: Array<{ id, position, label, note, auto, createdAt }> }
 const bookmarksStore = new JsonStore(BOOKMARKS_FILE, {});
@@ -453,7 +454,7 @@ async function restoreBackup() {
 
 /** Files/folders this app actually owns under DATA_ROOT — deliberately not `userData` (Chromium's own profile/cache), which stays behind and is safe to lose: it only holds renderer localStorage (theme, sort, etc.), not library data, and moving it while its own process still has it open is asking for trouble. */
 function ownDataEntries() {
-  return [LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE, METADATA_FILE, COVER_CACHE, ONLINE_COVER_CACHE]
+  return [LIBRARY_DB_FILE, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE, METADATA_FILE, COVER_CACHE, ONLINE_COVER_CACHE]
     .filter((p) => fs.existsSync(p));
 }
 
@@ -495,7 +496,7 @@ async function changeDataLocation() {
   const target = filePaths[0];
   if (path.resolve(target) === path.resolve(DATA_ROOT)) return;
 
-  const hasExistingData = fs.existsSync(path.join(target, 'library.json'));
+  const hasExistingData = fs.existsSync(path.join(target, 'library.db')) || fs.existsSync(path.join(target, 'library.json'));
 
   const { response } = hasExistingData
     ? await dialog.showMessageBox(mainWindow, {
@@ -520,15 +521,33 @@ async function changeDataLocation() {
   if (response !== 1) return;
 
   if (!hasExistingData) {
-    libraryStore.flushSync();
     progressStore.flushSync();
     bookmarksStore.flushSync();
     normalizationStore.flushSync();
     metadataStore.flushSync();
     try {
       await fsp.mkdir(target, { recursive: true });
+      // The sqlite db moves last, and only once every other entry has
+      // already moved successfully -- closing it (required so its file
+      // handle doesn't block the move on Windows) is the one step here that
+      // can't just be retried in place if something earlier in the loop
+      // fails, so nothing should reach it until the rest has succeeded.
       for (const src of ownDataEntries()) {
+        if (src === LIBRARY_DB_FILE) continue;
         await moveEntry(src, path.join(target, path.basename(src)));
+      }
+      if (fs.existsSync(LIBRARY_DB_FILE)) {
+        await libraryStore.close();
+        try {
+          await moveEntry(LIBRARY_DB_FILE, path.join(target, path.basename(LIBRARY_DB_FILE)));
+        } catch (err) {
+          // Reopen at the old location so the app isn't left with a closed,
+          // unusable library store if the move itself is what failed.
+          await libraryStore.load(LIBRARY_FILE).catch((reopenErr) => {
+            console.error('[db] failed to reopen after a failed move:', reopenErr.message);
+          });
+          throw err;
+        }
       }
     } catch (err) {
       dialog.showErrorBox('Move failed', `Could not move your data to the new location:\n${err.message}`);
@@ -1432,8 +1451,16 @@ function normalizeCoverPaths(libraryState) {
 }
 
 app.whenReady().then(async () => {
+  try {
+    await libraryStore.load(LIBRARY_FILE);
+  } catch (err) {
+    // A corrupt/unreadable library.db shouldn't take the whole app down --
+    // fall back to an empty library, same as a fresh install. Nothing here
+    // is destroyed: the file on disk is left exactly as it was.
+    console.error('[db] failed to open library database, starting with an empty library:', err);
+  }
   await Promise.all([
-    libraryStore.load(), progressStore.load(), bookmarksStore.load(),
+    progressStore.load(), bookmarksStore.load(),
     normalizationStore.load(), metadataStore.load(),
   ]);
   if (normalizeCoverPaths(libraryStore.get())) libraryStore.flush();
@@ -1468,8 +1495,21 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
-  libraryStore.flushSync();
+// Unlike the other stores, the sqlite-backed library store has no true
+// synchronous flush — closing it is a real async operation. Deferring quit
+// with preventDefault()/app.quit() (rather than just firing the close and
+// not waiting) is what makes that safe: without it, Electron would tear the
+// process down while a write could still be in flight.
+let readyToQuit = false;
+app.on('before-quit', (event) => {
+  if (readyToQuit) return;
+  event.preventDefault();
+  libraryStore.close().catch((err) => {
+    console.error('[db] close on quit failed:', err.message);
+  }).finally(() => {
+    readyToQuit = true;
+    app.quit();
+  });
   progressStore.flushSync();
   bookmarksStore.flushSync();
   normalizationStore.flushSync();

@@ -56,7 +56,10 @@ module.exports = {
   // Covers fetched from the online metadata lookup, kept separate from
   // extracted-from-file covers so the two provenances aren't muddled on disk.
   ONLINE_COVER_CACHE: path.join(DATA_ROOT, 'covers-online'),
+  // Legacy monolithic store, kept only so startup can detect and migrate a
+  // pre-SQLite install; the app no longer writes here once library.db exists.
   LIBRARY_FILE: path.join(DATA_ROOT, 'library.json'),
+  LIBRARY_DB_FILE: path.join(DATA_ROOT, 'library.db'),
   PROGRESS_FILE: path.join(DATA_ROOT, 'progress.json'),
   BOOKMARKS_FILE: path.join(DATA_ROOT, 'bookmarks.json'),
   NORMALIZATION_FILE: path.join(DATA_ROOT, 'normalization.json'),

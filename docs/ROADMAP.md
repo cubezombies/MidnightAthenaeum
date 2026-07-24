@@ -626,15 +626,28 @@ optional module.
 
 ## Performance & architecture optimizations
 
-The current design loads a **57 MB `library.json` fully into memory and ships the
-whole thing over IPC**, renders cards by appending pages, and serves full-size
-covers. That works at 6,300 books but is the main scaling ceiling.
+The current design loads the **whole library fully into memory and ships it
+over IPC** at startup (now backed by `library.db` on disk, not a monolithic
+JSON file — see #1 below), renders cards by appending pages, and serves
+full-size covers. That works at 6,300 books but is the main scaling ceiling.
 
-### 1. Move the library to SQLite — **M/L** ⭐
-Replace the monolithic JSON with `better-sqlite3`. Query per view (a page, a
-search, one book) instead of loading and IPC-transferring everything at startup.
-Enables instant search, partial updates on rescan, bookmarks/stats tables, and
-kills the big IPC payload. Highest-leverage architectural change.
+### 1. Move the library to SQLite — **backend swap shipped** ✅, **query-per-view still open**
+`library.json` is now `library.db` (`src/main/db.js`), migrated automatically
+on first launch of this version (old file kept as `library.json.bak`, never
+deleted). Real per-row writes replace whole-file rewrites — on the real
+5,823-book/46.5 MB library, a no-op rescan went from a full JSON re-serialize
+to ~2 ms, and a single detail-fill write from a full rewrite to ~9 ms; cold
+load is ~225 ms. `better-sqlite3` segfaulted on this machine's Electron 34
+build (native-module incompatibility, never resolved); shipped with
+`@vscode/sqlite3` instead — same schema, but its callback-only API means
+`db.js` is async under the hood, fronted by an in-memory cache so every
+existing call site keeps its old synchronous `get()`/`set()` shape and the
+renderer sees zero change.
+Deliberately **not done**: the grid/search/sort/filter still load the full
+book array over IPC at startup and filter in memory client-side — instant
+server-side search and query-per-view (a page, a search, one book) are a
+separable, larger change to the app's interaction model and remain a future
+pass.
 
 ### 2. Cover thumbnails — **M**
 Generate and cache small (~200 px WebP) thumbnails at scan time; the grid loads
