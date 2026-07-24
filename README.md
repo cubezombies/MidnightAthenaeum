@@ -9,6 +9,13 @@ shelf, library filters, and **series grouping** keep the book you're on one clic
 away, even in a library of thousands. Light and dark themes, following the system
 by default.
 
+![Library view, with a Continue listening shelf, filters, and series grouping](assets/screenshot-library.png)
+
+*(Shown with a synthetic demo library, not real book covers — a virtualized
+grid renders only what's on screen, so this scales cleanly to thousands of
+books; see [Performance & architecture optimizations](docs/ROADMAP.md) for
+details.)*
+
 ## Icons
 
 The app icon is generated from `assets/logo.png` — the emblem is cropped out
