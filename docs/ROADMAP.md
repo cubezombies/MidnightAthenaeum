@@ -628,8 +628,9 @@ optional module.
 
 The current design loads the **whole library fully into memory and ships it
 over IPC** at startup (now backed by `library.db` on disk, not a monolithic
-JSON file — see #1 below), renders cards by appending pages, and serves
-full-size covers. That works at 6,300 books but is the main scaling ceiling.
+JSON file — see #1 below). The grid is now virtualized and covers are now
+thumbnailed (see #2/#3) — the remaining ceiling is the full-library
+IPC/in-memory load itself, not rendering or cover decode.
 
 ### 1. Move the library to SQLite — **backend swap shipped** ✅, **query-per-view still open**
 `library.json` is now `library.db` (`src/main/db.js`), migrated automatically
@@ -649,15 +650,28 @@ server-side search and query-per-view (a page, a search, one book) are a
 separable, larger change to the app's interaction model and remain a future
 pass.
 
-### 2. Cover thumbnails — **M**
-Generate and cache small (~200 px WebP) thumbnails at scan time; the grid loads
-those instead of full covers. Cuts grid memory and decode time sharply — the
-biggest contributor to the renderer's footprint on a large library.
+### 2. Cover thumbnails — **shipped** ✅
+Small (~200 px) JPEG thumbnails (`jimp`; no WebP encoder available in this
+dependency, see below) generated at detail-fill time and cached in
+`COVER_CACHE/{id}-thumb.jpg`; the grid, series-grouped view, and duplicates
+finder all load these instead of the full-size cover. A backfill pass
+(`runThumbnailFill`, chained after the ebook-pairing fill) catches
+books that were already fully detailed before this shipped. Book detail
+view still shows the full-size cover — thumbnails are grid-only.
 
-### 3. True virtualized grid — **M**
-The grid appends pages but never releases off-screen cards, so memory still grows
-as you scroll a 6k-book library. A windowing/recycling list (render only the
-visible range ± a buffer) bounds DOM and memory regardless of scroll depth.
+### 3. True virtualized grid — **shipped** ✅
+`#grid` now renders only the visible range ± a buffer, framed by two spacer
+elements that reserve scroll space for the rest — DOM node count stays
+bounded regardless of scroll depth or library size, instead of growing
+monotonically as pages were appended. Verified via a headless-Chromium
+harness (no real windowed Electron launch works in this dev sandbox) against
+a synthetic 6,000-book library.
+
+Shipping these two together mattered: virtualizing the grid alone made
+scrolling-back-into-a-visited-section noticeably *slower* than before (cards
+leaving the DOM meant their already-decoded full-size cover images had to
+redecode from scratch on return) — cover thumbnails are what actually fixed
+that regression, not just a nice-to-have on their own.
 
 ### 4. Incremental scan via file watcher — **M**
 A full rescan of `E:\Books` takes ~40 minutes. Watch library folders (`chokidar`)

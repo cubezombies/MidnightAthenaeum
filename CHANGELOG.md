@@ -8,6 +8,18 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-24
+### Changed
+- The library grid now renders only the books actually in or near view,
+  instead of accumulating every card you've ever scrolled past — memory and
+  DOM size stay flat no matter how far you scroll a large library.
+- Covers now get a small cached thumbnail (generated in the background,
+  same pass that already fills in chapters) that the grid, series view, and
+  duplicates finder load instead of the full-size image. Combined with the
+  grid change above, scrolling back into a section you'd already passed no
+  longer visibly pauses to redecode covers. The book view still shows your
+  covers at full resolution.
+
 ## [0.11.0] - 2026-07-24
 ### Changed
 - The library index moved from one monolithic `library.json` file to a real

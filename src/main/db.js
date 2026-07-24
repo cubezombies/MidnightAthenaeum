@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS books (
   description   TEXT,
   duration      REAL NOT NULL,
   cover         TEXT,
+  coverThumb    TEXT,
   tracksJson    TEXT NOT NULL,
   chaptersJson  TEXT NOT NULL,
   signature     TEXT NOT NULL,
@@ -31,12 +32,12 @@ CREATE TABLE IF NOT EXISTS folders (
 `;
 
 const UPSERT_SQL = `
-INSERT INTO books (id, kind, sourceDir, title, author, narrator, year, description, duration, cover, tracksJson, chaptersJson, signature, detailPending, detailFailed, tagsFailed)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO books (id, kind, sourceDir, title, author, narrator, year, description, duration, cover, coverThumb, tracksJson, chaptersJson, signature, detailPending, detailFailed, tagsFailed)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   kind=excluded.kind, sourceDir=excluded.sourceDir, title=excluded.title, author=excluded.author,
   narrator=excluded.narrator, year=excluded.year, description=excluded.description, duration=excluded.duration,
-  cover=excluded.cover, tracksJson=excluded.tracksJson, chaptersJson=excluded.chaptersJson,
+  cover=excluded.cover, coverThumb=excluded.coverThumb, tracksJson=excluded.tracksJson, chaptersJson=excluded.chaptersJson,
   signature=excluded.signature, detailPending=excluded.detailPending, detailFailed=excluded.detailFailed,
   tagsFailed=excluded.tagsFailed
 `;
@@ -91,6 +92,7 @@ function rowToBook(row) {
     description: row.description,
     duration: row.duration,
     cover: row.cover,
+    coverThumb: row.coverThumb,
     tracks: JSON.parse(row.tracksJson),
     chapters: JSON.parse(row.chaptersJson),
     signature: row.signature,
@@ -104,7 +106,7 @@ function bookToParams(book) {
   return [
     book.id, book.kind, book.sourceDir, book.title, book.author,
     book.narrator ?? null, book.year ?? null, book.description ?? null,
-    book.duration, book.cover ?? null,
+    book.duration, book.cover ?? null, book.coverThumb ?? null,
     JSON.stringify(book.tracks ?? []), JSON.stringify(book.chapters ?? []),
     book.signature, book.detailPending ? 1 : 0, book.detailFailed ? 1 : 0, book.tagsFailed ? 1 : 0,
   ];
@@ -112,9 +114,21 @@ function bookToParams(book) {
 
 async function runSchema(db) {
   await exec(db, SCHEMA_SQL);
+  // First real forward-migration db.js has needed since shipping: a
+  // pre-existing v0.11.0 database's `books` table was created before
+  // coverThumb existed, so `CREATE TABLE IF NOT EXISTS` above is a no-op for
+  // it (that clause only skips table creation, it doesn't add new columns to
+  // an existing table). Gate the ALTER on the actual column list rather than
+  // PRAGMA user_version (nothing reads that today) -- a fresh install's
+  // CREATE TABLE already includes coverThumb, so trusting version sequencing
+  // alone would try to add it twice and error.
+  const columns = await all(db, 'PRAGMA table_info(books)');
+  if (!columns.some((c) => c.name === 'coverThumb')) {
+    await run(db, 'ALTER TABLE books ADD COLUMN coverThumb TEXT');
+  }
   await run(db, 'PRAGMA journal_mode = DELETE');
   await run(db, 'PRAGMA synchronous = FULL');
-  await run(db, 'PRAGMA user_version = 1');
+  await run(db, 'PRAGMA user_version = 2');
 }
 
 /**

@@ -4,7 +4,8 @@ const $ = (id) => document.getElementById(id);
 
 const el = {
   main: $('main'),
-  grid: $('grid'), emptyState: $('emptyState'), search: $('search'), libraryLoading: $('libraryLoading'),
+  grid: $('grid'), gridTopSpacer: $('gridTopSpacer'), gridBottomSpacer: $('gridBottomSpacer'),
+  emptyState: $('emptyState'), search: $('search'), libraryLoading: $('libraryLoading'),
   continueSection: $('continueSection'), continueRow: $('continueRow'),
   libraryToolbar: $('libraryToolbar'), filterTabs: $('filterTabs'), filterCount: $('filterCount'),
   groupToggle: $('groupToggle'), sortSelect: $('sortSelect'),
@@ -135,7 +136,12 @@ const state = {
   displayItems: [],    // grid items (book cards and series tiles) after filtering
   seriesByKey: new Map(), // group.key -> group, for the grid's delegated click handler
   filtered: [],        // books matching the current search
-  gridShown: 0,        // how many cards are currently in the DOM
+  // Main-grid virtualization: gridWindow is the [start,end) index range into
+  // displayItems currently rendered as real DOM cards; gridMetrics is
+  // measured from a real rendered card, not computed from CSS constants, so
+  // it can never drift from what the browser's own grid layout produces.
+  gridWindow: { start: -1, end: -1 },
+  gridMetrics: { columns: 0, rowHeight: 0, gridStartY: 0 },
   userVolume: 1,       // volume the user set; audio volume = this * sleep fade
   sleep: {
     mode: 'off',       // 'off' | 'duration' | 'chapter' | 'book'
@@ -171,7 +177,9 @@ const state = {
   readAlongHtmlCache: new Map(), // "bookId::spineHref" -> html string
 };
 
-let gridObserver = null;
+let gridResizeObserver = null;
+let gridResizeDebounce = null;
+let gridScrollScheduled = false;
 const SLEEP_FADE_SEC = 20;   // gentle fade over the final stretch
 const SLEEP_REWIND_SEC = 30; // rewind on resume after the timer stops you
 
@@ -325,8 +333,6 @@ function formatDurationLong(seconds) {
 
 /* ---------------- library grid ---------------- */
 
-const GRID_PAGE = 120;
-
 function buildCard(book, { badge, delegate } = {}) {
   const saved = state.progress[book.id];
   // A finished book always reads as a full bar, even if it was marked finished
@@ -346,7 +352,7 @@ function buildCard(book, { badge, delegate } = {}) {
   art.className = 'card-art';
   if (book.coverUrl) {
     const img = document.createElement('img');
-    img.src = book.coverUrl;
+    img.src = book.coverThumbUrl || book.coverUrl;
     img.alt = `${book.title} cover`;
     img.loading = 'lazy';
     art.append(img);
@@ -575,7 +581,7 @@ function buildSeriesTile(group, { delegate } = {}) {
   if (first.book.coverUrl) {
     const img = document.createElement('img');
     img.className = 'series-cover';
-    img.src = first.book.coverUrl;
+    img.src = first.book.coverThumbUrl || first.book.coverUrl;
     img.alt = `${group.name} series`;
     img.loading = 'lazy';
     art.append(img);
@@ -623,9 +629,12 @@ function buildSeriesTile(group, { delegate } = {}) {
 
 /**
  * A 10k-book library is far too many cards to put in the DOM at once (it costs
- * ~2 GB). Render in pages and append the next one when a sentinel near the
- * bottom scrolls into view, so the node count tracks how far the user has
- * actually scrolled rather than the library size.
+ * ~2 GB). `#grid` stays a real CSS Grid (so the browser's own `auto-fill`
+ * column layout keeps doing the work), but only ever holds the current
+ * scroll window's worth of cards -- two sibling spacer divs
+ * (gridTopSpacer/gridBottomSpacer) reserve scroll space for the hidden rows
+ * above/below, sized from measurements taken off a real rendered card (see
+ * measureGridMetrics), never approximated from CSS constants.
  */
 function renderGrid() {
   const query = el.search.value.trim().toLowerCase();
@@ -654,38 +663,160 @@ function renderGrid() {
     ? `${state.filtered.length.toLocaleString()} books · ${seriesCount} series`
     : `${state.filtered.length.toLocaleString()} book${state.filtered.length === 1 ? '' : 's'}`;
 
-  gridObserver?.disconnect();
-  el.grid.replaceChildren();
-  state.gridShown = 0;
-  appendGridPage();
+  remeasureAndRewindow();
 }
 
-function appendGridPage() {
-  const items = state.displayItems;
-  const end = Math.min(state.gridShown + GRID_PAGE, items.length);
-  const frag = document.createDocumentFragment();
-  for (let i = state.gridShown; i < end; i += 1) {
-    const item = items[i];
-    frag.append(item.type === 'series'
-      ? buildSeriesTile(item.series, { delegate: true })
-      : buildCard(item.book, { delegate: true }));
-  }
-  el.grid.append(frag);
-  state.gridShown = end;
+function buildGridItemCard(item) {
+  return item.type === 'series'
+    ? buildSeriesTile(item.series, { delegate: true })
+    : buildCard(item.book, { delegate: true });
+}
 
-  if (end < items.length) {
-    const sentinel = document.createElement('div');
-    sentinel.className = 'grid-sentinel';
-    el.grid.append(sentinel);
-    gridObserver = new IntersectionObserver((entries) => {
-      if (entries.some((e) => e.isIntersecting)) {
-        gridObserver.disconnect();
-        sentinel.remove();
-        appendGridPage();
-      }
-    }, { root: el.main, rootMargin: '600px' });
-    gridObserver.observe(sentinel);
+/**
+ * Column count and row height, read back from a real rendered card rather
+ * than computed from CSS constants -- this must stay pixel-exact with
+ * whatever the browser's own `auto-fill` grid algorithm actually produced,
+ * which hand-rolled math could silently drift from (e.g. if the CSS ever
+ * changes). Returns false (leaving state.gridMetrics untouched) if there's
+ * nothing to measure yet.
+ */
+function measureGridMetrics() {
+  const probe = el.grid.querySelector('.card');
+  if (!probe) return false;
+
+  const cols = getComputedStyle(el.grid).gridTemplateColumns.split(' ').length;
+  const rowGap = parseFloat(getComputedStyle(el.grid).rowGap) || 0;
+  const cardHeight = probe.getBoundingClientRect().height;
+  if (!cols || !cardHeight) return false;
+
+  // The top spacer's own top edge -- not #grid's -- is the stable reference
+  // for "where row 0 starts": #grid's position shifts as the top spacer's
+  // height changes (that's the whole mechanism), but whatever sits above the
+  // spacer (toolbar, continue shelf) is fixed for this render pass.
+  const gridStartY = el.gridTopSpacer.getBoundingClientRect().top
+    - el.main.getBoundingClientRect().top + el.main.scrollTop;
+
+  state.gridMetrics = { columns: cols, rowHeight: cardHeight + rowGap, gridStartY };
+  return true;
+}
+
+/** The [start,end) item-index range that should be rendered for the current scroll position, given the last-measured metrics. */
+function computeGridWindow() {
+  const { columns, rowHeight, gridStartY } = state.gridMetrics;
+  const total = state.displayItems.length;
+  const totalRows = Math.ceil(total / columns);
+
+  const scrolledIntoGrid = Math.max(0, el.main.scrollTop - gridStartY);
+  const firstVisibleRow = Math.floor(scrolledIntoGrid / rowHeight);
+  const viewportRows = Math.max(1, Math.ceil(el.main.clientHeight / rowHeight));
+  const bufferRows = viewportRows; // ~one extra screen's worth above and below
+
+  const startRow = Math.max(0, firstVisibleRow - bufferRows);
+  const endRow = Math.min(totalRows, firstVisibleRow + viewportRows + bufferRows);
+
+  return { start: startRow * columns, end: Math.min(total, endRow * columns) };
+}
+
+// item index -> its current DOM card node. Only valid for the current
+// state.displayItems array -- cleared at the start of every
+// remeasureAndRewindow() (i.e. whenever displayItems itself might have
+// changed), so it only ever carries nodes across pure scroll events, where
+// reuse is safe because content hasn't changed, only which range is visible.
+let gridNodeCache = new Map();
+
+/**
+ * Replaces #grid's children with exactly the given item range and resizes
+ * both spacers to match -- a no-op if that range is already what's rendered.
+ * Reuses existing DOM nodes for indices that were already rendered (from
+ * gridNodeCache) rather than rebuilding everything on every call: with a
+ * buffer as large as computeGridWindow's, consecutive scroll frames share
+ * most of their range, and rebuilding cards wholesale on every frame was
+ * forcing already-decoded cover images to reload/redecode from scratch on
+ * every scroll tick -- visible as covers "popping in" slowly while
+ * scrolling, since a card that never left the window still got torn down
+ * and recreated anyway.
+ * Note: a card that's Tab-focused and then scrolled far away (via mouse
+ * wheel, not Tab itself) can be removed from the DOM here, dropping focus to
+ * document.body -- an accepted trade-off of any virtualized list, not
+ * something this deliberately preserves.
+ */
+function renderGridWindow(range) {
+  if (range.start === state.gridWindow.start && range.end === state.gridWindow.end) return;
+
+  const nodes = [];
+  for (let i = range.start; i < range.end; i += 1) {
+    let node = gridNodeCache.get(i);
+    if (!node) {
+      node = buildGridItemCard(state.displayItems[i]);
+      gridNodeCache.set(i, node);
+    }
+    nodes.push(node);
   }
+  // Drop cache entries that fell out of the window so it doesn't grow
+  // unbounded as the user scrolls through a large library.
+  for (const key of gridNodeCache.keys()) {
+    if (key < range.start || key >= range.end) gridNodeCache.delete(key);
+  }
+
+  // Re-using existing element objects here (not rebuilding them) is what
+  // makes this a cheap reorder/move for the browser instead of a
+  // destroy-and-recreate -- an element passed to replaceChildren that's
+  // already in the document keeps its state (a decoded <img>, in particular)
+  // rather than being torn down.
+  el.grid.replaceChildren(...nodes);
+  state.gridWindow = range;
+
+  const { columns, rowHeight } = state.gridMetrics;
+  const totalRows = Math.ceil(state.displayItems.length / columns);
+  const rowsAbove = Math.floor(range.start / columns);
+  const rowsBelow = Math.max(0, totalRows - Math.ceil(range.end / columns));
+  el.gridTopSpacer.style.height = `${rowsAbove * rowHeight}px`;
+  el.gridBottomSpacer.style.height = `${rowsBelow * rowHeight}px`;
+}
+
+/**
+ * Full remeasure + rewindow -- called after anything that changes
+ * displayItems (renderGrid) or the grid's width (resize). Measuring needs a
+ * real rendered card; deciding what to render needs measurements, so this
+ * always renders a small provisional batch of the *current* displayItems
+ * first purely so there's something real to measure, then immediately
+ * corrects to the real computed window. This can't reuse whatever cards
+ * happen to already be in #grid as the probe instead -- those could be
+ * leftovers from a different render (e.g. series tiles, which carry a
+ * different `.card-title` margin-top than book cards -- see styles.css),
+ * which would silently bake a wrong row height into gridMetrics before the
+ * new content is even rendered.
+ */
+function remeasureAndRewindow() {
+  // displayItems is about to represent possibly-entirely-different content --
+  // any cached nodes from before this point are no longer safe to reuse.
+  gridNodeCache.clear();
+
+  if (!state.displayItems.length) {
+    el.grid.replaceChildren();
+    el.gridTopSpacer.style.height = '0px';
+    el.gridBottomSpacer.style.height = '0px';
+    state.gridWindow = { start: -1, end: -1 };
+    state.gridMetrics = { columns: 0, rowHeight: 0, gridStartY: 0 };
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  const provisional = Math.min(24, state.displayItems.length);
+  for (let i = 0; i < provisional; i += 1) {
+    const node = buildGridItemCard(state.displayItems[i]);
+    gridNodeCache.set(i, node); // so renderGridWindow below can reuse these instead of rebuilding them
+    frag.append(node);
+  }
+  el.grid.replaceChildren(frag);
+
+  if (!measureGridMetrics()) return; // nothing renderable to measure against (shouldn't happen given the guard above)
+
+  // Force renderGridWindow to actually re-render even if the computed range
+  // numerically matches the previous one -- metrics may have just changed
+  // (e.g. a resize), which the range-equality check alone can't detect.
+  state.gridWindow = { start: -1, end: -1 };
+  renderGridWindow(computeGridWindow());
 }
 
 /**
@@ -714,6 +845,28 @@ el.grid.addEventListener('keydown', (e) => {
   e.preventDefault();
   activateGridCard(card);
 });
+
+// Registered once, for the app's lifetime -- rAF-throttled so recomputing
+// the visible window happens at most once per frame regardless of how fast
+// raw scroll events fire, and reuses the metrics measured by the last
+// remeasureAndRewindow() rather than touching the DOM on every frame.
+el.main.addEventListener('scroll', () => {
+  if (gridScrollScheduled) return;
+  gridScrollScheduled = true;
+  requestAnimationFrame(() => {
+    gridScrollScheduled = false;
+    if (!state.gridMetrics.rowHeight) return;
+    renderGridWindow(computeGridWindow());
+  });
+});
+
+// Column count depends on #main's width; nothing reacted to a window resize
+// before this. Debounced so a live window drag doesn't thrash re-measurement.
+gridResizeObserver = new ResizeObserver(() => {
+  clearTimeout(gridResizeDebounce);
+  gridResizeDebounce = setTimeout(remeasureAndRewindow, 150);
+});
+gridResizeObserver.observe(el.main);
 
 /* ---------------- series view ---------------- */
 
@@ -3169,6 +3322,7 @@ window.api.onLibraryChanged(applyState);
 let lastScanProgress = { done: 0, total: 0, scanning: false };
 let lastDetailProgress = { done: 0, total: 0, active: false };
 let lastPairingProgress = { done: 0, total: 0, active: false };
+let lastThumbnailProgress = { done: 0, total: 0, active: false };
 
 function renderScanStatus() {
   if (lastScanProgress.scanning) {
@@ -3179,6 +3333,8 @@ function renderScanStatus() {
     el.scanStatus.textContent = `Filling in covers & chapters: ${lastDetailProgress.done}/${lastDetailProgress.total}…`;
   } else if (lastPairingProgress.active) {
     el.scanStatus.textContent = `Checking for matching ebooks: ${lastPairingProgress.done}/${lastPairingProgress.total}…`;
+  } else if (lastThumbnailProgress.active) {
+    el.scanStatus.textContent = `Generating thumbnails: ${lastThumbnailProgress.done}/${lastThumbnailProgress.total}…`;
   } else {
     el.scanStatus.textContent = '';
   }
@@ -3199,6 +3355,10 @@ window.api.onDetailProgress(({ done, total, active }) => {
 });
 window.api.onPairingProgress(({ done, total, active }) => {
   lastPairingProgress = { done, total, active };
+  renderScanStatus();
+});
+window.api.onThumbnailProgress(({ done, total, active }) => {
+  lastThumbnailProgress = { done, total, active };
   renderScanStatus();
 });
 

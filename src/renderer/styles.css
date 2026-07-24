@@ -210,7 +210,14 @@ input[type="search"]:focus { border-color: var(--accent); }
 .card-art .placeholder .icon, .series-cover.placeholder .icon { width: 34px; height: 34px; }
 
 /* ---------- Main ---------- */
-#main { flex: 1; overflow-y: auto; padding: 22px; }
+/* overflow-anchor: none -- the library grid's virtualization replaces #grid's
+   children whenever a background update patches a book while the user is
+   scrolled deep into the list (see patchBooks/remeasureAndRewindow in
+   app.js), without itself touching scrollTop. Without this, the browser's
+   default scroll-anchoring "helpfully" adjusts scrollTop on its own to
+   compensate for the DOM mutation, fighting the windowing math and landing
+   scroll position (and the rendered window) somewhere wrong. */
+#main { flex: 1; overflow-y: auto; padding: 22px; overflow-anchor: none; }
 body.playing #main { padding-bottom: calc(var(--player-h) + 22px); }
 
 /* Shown until the first library:changed/getState() response arrives, so the
@@ -325,6 +332,9 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 20px;
 }
+/* Height is set from JS (renderer virtualization) to reserve scroll space
+   for the rows above/below the currently-rendered window. */
+.grid-spacer { width: 100%; }
 
 .card { cursor: pointer; border-radius: 12px; }
 .card-art {
@@ -355,8 +365,12 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 .card-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.5); }
 .card-bar span { display: block; height: 100%; background: var(--accent); }
 
-.card-title { margin-top: 8px; font-size: 13px; font-weight: 500; line-height: 1.35; }
-.card-author { font-size: 12px; color: var(--muted); }
+/* min-height (tied to each rule's own line-height, so 1 line reserves the
+   same box as 2) keeps every card the same height regardless of whether its
+   title/author text wraps -- the main grid's virtualization assumes a
+   uniform row height measured from one real card. */
+.card-title { margin-top: 8px; font-size: 13px; font-weight: 500; line-height: 1.35; min-height: 2.7em; }
+.card-author { font-size: 12px; color: var(--muted); line-height: 1.5; min-height: 3em; }
 .card-title, .card-author {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }

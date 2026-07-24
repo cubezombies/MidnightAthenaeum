@@ -84,6 +84,11 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('library:pairingProgress', listener);
     return () => ipcRenderer.off('library:pairingProgress', listener);
   },
+  onThumbnailProgress: (cb) => {
+    const listener = (_event, payload) => cb(payload);
+    ipcRenderer.on('library:thumbnailProgress', listener);
+    return () => ipcRenderer.off('library:thumbnailProgress', listener);
+  },
   onScanProgress: (cb) => {
     const listener = (_event, payload) => cb(payload);
     ipcRenderer.on('library:scan-progress', listener);

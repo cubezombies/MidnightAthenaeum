@@ -191,6 +191,11 @@ function toClientBook(book) {
   // an online source has no idea where this specific rip's chapters fall.
   const override = metadataStore.get()[book.id];
   const cover = override?.hasCover ? onlineCoverPath(book.id) : book.cover;
+  // Online-metadata-override covers don't have a generated thumbnail (a
+  // separate, smaller cache/flow via ONLINE_COVER_CACHE) -- the grid falls
+  // back to the full-size coverUrl for those few books, same as before this
+  // field existed.
+  const coverThumb = override?.hasCover ? null : book.coverThumb;
 
   return {
     id: book.id,
@@ -204,6 +209,7 @@ function toClientBook(book) {
     chapters: book.chapters,
     tracks,
     coverUrl: cover ? mediaUrl(cover) : null,
+    coverThumbUrl: coverThumb ? mediaUrl(coverThumb) : null,
     mtimeMs: bookMtime(book),
     fileName: path.basename(book.tracks[0]?.filePath ?? ''),
     trackCount: book.tracks.length,
@@ -800,10 +806,74 @@ function runPairingFill() {
   return pairingFillPromise;
 }
 
+let thumbnailFillRunning = false;
+let thumbnailFillPromise = Promise.resolve();
+let thumbnailFillCancelToken = { cancelled: false };
+
+async function stopThumbnailFill() {
+  thumbnailFillCancelToken.cancelled = true;
+  await thumbnailFillPromise;
+}
+
+/**
+ * Backfill-only pass: generates cover thumbnails (see library.js's
+ * generateCoverThumb) for books that already have a full cover but no
+ * thumbnail yet — i.e. books that were fully detailed (detailPending:
+ * false) before thumbnails existed, so fillOneBookDetail's inline
+ * generation will never reach them again on its own. A freshly scanned or
+ * freshly detail-filled book already gets its thumbnail as part of that
+ * same pass; this only mops up the pre-existing backlog. Same
+ * gentle-sequential-after-pairing-fill precedent as runPairingFill.
+ */
+function runThumbnailFill() {
+  if (thumbnailFillRunning) return thumbnailFillPromise;
+  const books = libraryStore.get().books;
+  const pending = books.filter((b) => b.cover && !b.coverThumb);
+  if (!pending.length) return Promise.resolve();
+
+  thumbnailFillRunning = true;
+  thumbnailFillCancelToken = { cancelled: false };
+  const token = thumbnailFillCancelToken;
+  let done = 0;
+  let batch = [];
+  let lastFlush = Date.now();
+
+  const flush = () => {
+    if (!batch.length) return;
+    const fresh = libraryStore.get().books;
+    const updated = batch.map((id) => fresh.find((b) => b.id === id)).filter(Boolean).map(toClientBook);
+    if (updated.length) mainWindow?.webContents.send('library:booksUpdated', updated);
+    batch = [];
+    lastFlush = Date.now();
+  };
+
+  mainWindow?.webContents.send('library:thumbnailProgress', { done, total: pending.length, active: true });
+
+  thumbnailFillPromise = (async () => {
+    for (const book of pending) {
+      if (token.cancelled) break;
+      // eslint-disable-next-line no-await-in-loop
+      const coverThumb = await library.generateCoverThumb(book.id, book.cover);
+      if (!coverThumb || !writeDetailUpdate({ ...book, coverThumb })) continue;
+      done += 1;
+      batch.push(book.id);
+      if (batch.length >= 25 || Date.now() - lastFlush > 1000) flush();
+      mainWindow?.webContents.send('library:thumbnailProgress', { done, total: pending.length, active: true });
+    }
+  })().finally(() => {
+    flush();
+    thumbnailFillRunning = false;
+    mainWindow?.webContents.send('library:thumbnailProgress', { done, total: pending.length, active: false });
+  });
+
+  return thumbnailFillPromise;
+}
+
 async function runScan() {
   if (scanning) return;
   await stopDetailFill(); // phase 2 must fully quiesce before we read the cache snapshot below
   await stopPairingFill();
+  await stopThumbnailFill();
   const state = libraryStore.get();
   if (!state.folders.length) {
     libraryStore.set({ ...state, books: [] });
@@ -827,8 +897,9 @@ async function runScan() {
     mainWindow?.webContents.send('library:scan-progress', { done: 0, total: 0, scanning: false });
     mainWindow?.webContents.send('library:changed', currentState());
     refreshJumpList(); // a removed/renamed book could be sitting in the list
-    // Background phase 2, then ebook-pairing fill after it -- both fire-and-forget from here.
-    runDetailFill().then(() => runPairingFill());
+    // Background phase 2, then ebook-pairing fill, then thumbnail backfill --
+    // all fire-and-forget from here.
+    runDetailFill().then(() => runPairingFill()).then(() => runThumbnailFill());
   }
 }
 
@@ -1254,6 +1325,7 @@ function registerIpc() {
       duration: book.duration,
       trackCount: book.tracks.length,
       coverUrl: book.cover ? mediaUrl(book.cover) : null,
+      coverThumbUrl: book.coverThumb ? mediaUrl(book.coverThumb) : null,
     };
   }
 
@@ -1431,23 +1503,37 @@ function registerIpc() {
 }
 
 /**
- * Extracted covers live in COVER_CACHE, but the library file stores their
- * absolute paths. If the data root moves (e.g. a rename), those paths point at
- * the old location and every cover 404s. Repoint any cover that sits in a
- * `covers` folder other than the current cache, so a move self-heals.
+ * Extracted covers (and their thumbnails) live in COVER_CACHE, but the
+ * library stores their absolute paths. If the data root moves (e.g. a
+ * rename), those paths point at the old location and every cover 404s.
+ * Repoints any cover/thumbnail that sits in a `covers` folder other than the
+ * current cache, so a move self-heals. Returns a new books array (rather
+ * than mutating the objects `libraryState.books` handed in) so the caller
+ * can route the result through `libraryStore.set()` — LibraryDb's diffing
+ * keys off object *reference* changes, so mutating book.cover in place on
+ * objects already sitting in its cache would never actually get queued for
+ * a write, even though it looks fixed for the rest of this session.
  */
 function normalizeCoverPaths(libraryState) {
   let changed = 0;
-  for (const book of libraryState.books ?? []) {
-    if (!book.cover) continue;
-    const dir = path.dirname(book.cover);
+  const repoint = (p) => {
+    if (!p) return p;
+    const dir = path.dirname(p);
     if (path.basename(dir).toLowerCase() === 'covers' && dir !== COVER_CACHE) {
-      const moved = path.join(COVER_CACHE, path.basename(book.cover));
-      if (fs.existsSync(moved)) { book.cover = moved; changed += 1; }
+      const moved = path.join(COVER_CACHE, path.basename(p));
+      if (fs.existsSync(moved)) return moved;
     }
-  }
-  if (changed) console.log(`[library] repointed ${changed} cover paths to ${COVER_CACHE}`);
-  return changed > 0;
+    return p;
+  };
+  const books = (libraryState.books ?? []).map((book) => {
+    const cover = repoint(book.cover);
+    const coverThumb = repoint(book.coverThumb);
+    if (cover === book.cover && coverThumb === book.coverThumb) return book;
+    changed += 1;
+    return { ...book, cover, coverThumb };
+  });
+  if (changed) console.log(`[library] repointed ${changed} cover path(s) to ${COVER_CACHE}`);
+  return { books, changed: changed > 0 };
 }
 
 app.whenReady().then(async () => {
@@ -1463,7 +1549,14 @@ app.whenReady().then(async () => {
     progressStore.load(), bookmarksStore.load(),
     normalizationStore.load(), metadataStore.load(),
   ]);
-  if (normalizeCoverPaths(libraryStore.get())) libraryStore.flush();
+  {
+    const state = libraryStore.get();
+    const { books, changed } = normalizeCoverPaths(state);
+    if (changed) {
+      libraryStore.set({ folders: state.folders, books });
+      libraryStore.flush();
+    }
+  }
   registerMediaProtocol(getAllowedRoots);
   registerIpc();
   buildMenu();

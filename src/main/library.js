@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const Jimp = require('jimp');
 
 const { COVER_CACHE } = require('./paths');
 const { readMp4Duration, readMp4Chapters } = require('./mp4-chapters');
@@ -106,6 +107,30 @@ async function cacheCoverFromPicture(id, picture) {
     return target;
   } catch (err) {
     console.warn(`[library] could not cache cover ${id}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * A small (~200px wide) JPEG copy of a book's cover, always written to
+ * COVER_CACHE regardless of where `sourcePath` actually lives -- it can be
+ * an external folder image sitting in the user's library folder
+ * (findFolderImage returns that path in place, never copies it), and this
+ * must never write into a folder the app doesn't own. Best-effort, same
+ * precedent as cacheCoverFromPicture/tagsFailed elsewhere in this file: a
+ * corrupt or unsupported source image just means no thumbnail, not a
+ * failed scan -- the grid falls back to the full-size cover for that book.
+ */
+async function generateCoverThumb(id, sourcePath) {
+  if (!sourcePath) return null;
+  const target = path.join(COVER_CACHE, `${id}-thumb.jpg`);
+  try {
+    const img = await Jimp.read(sourcePath);
+    await fsp.mkdir(COVER_CACHE, { recursive: true });
+    await img.resize(200, Jimp.AUTO, Jimp.RESIZE_BICUBIC).quality(82).writeAsync(target);
+    return target;
+  } catch (err) {
+    console.warn(`[library] could not generate cover thumbnail for ${id}: ${err.message}`);
     return null;
   }
 }
@@ -304,10 +329,12 @@ async function fillOneBookDetail(book) {
 
     let cover = await cacheCoverFromPicture(book.id, tags.common.picture?.[0]);
     if (!cover) cover = await findFolderImage(book.sourceDir);
+    const coverThumb = await generateCoverThumb(book.id, cover);
 
     return {
       ...book,
       cover,
+      coverThumb,
       chapters,
       tracks: [{ ...book.tracks[0], title: chapters.length ? null : book.tracks[0].title }],
       detailPending: false,
@@ -318,7 +345,8 @@ async function fillOneBookDetail(book) {
   const tags = await readTags(filePath, true);
   let cover = await cacheCoverFromPicture(book.id, tags.common.picture?.[0]);
   if (!cover) cover = await findFolderImage(book.sourceDir);
-  return { ...book, cover, detailPending: false };
+  const coverThumb = await generateCoverThumb(book.id, cover);
+  return { ...book, cover, coverThumb, detailPending: false };
 }
 
 // bookId -> Promise<book>, shared between the background fill loop and any
@@ -467,5 +495,5 @@ async function scanLibrary(folders, cachedBooks = [], onProgress) {
 }
 
 module.exports = {
-  scanLibrary, fillBookDetails, ensureDetail, AUDIO_EXTENSIONS, hashId,
+  scanLibrary, fillBookDetails, ensureDetail, AUDIO_EXTENSIONS, hashId, generateCoverThumb,
 };
