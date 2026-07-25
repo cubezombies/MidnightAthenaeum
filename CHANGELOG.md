@@ -47,16 +47,6 @@ what the in-app "Check for Updates" screen shows) — see
   warm disk cache, and far more on a cold spinning drive where those checks
   were seeks. If a file is edited in place without its folder changing (a
   re-tag, say), File > Rescan library still does the full per-file check.
-- Scanning checked each book's files one at a time to decide whether it had
-  changed. Books split into hundreds of separate files (some libraries have
-  audiobooks with 300-500 tracks) therefore stalled the scan while several
-  hundred disk reads happened back-to-back, producing a pronounced CPU and
-  responsiveness dip part-way through every scan. Those checks now overlap,
-  the same way the rest of the scan already did.
-- Worker pool size reduced from 3 to 1. Parsing still runs entirely off the
-  UI thread (responsive, and a malicious file still can't hang the app),
-  but it no longer competes for multiple cores and disk queues at once
-  during a big first-run scan.
 - Added a diagnostic log (`diagnostic.log`, alongside your library data). It
   records scan progress and, if any part of the app ever dies unexpectedly,
   which part and why — so a future "it just closed itself" can be diagnosed
