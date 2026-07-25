@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS books (
   tracksJson    TEXT NOT NULL,
   chaptersJson  TEXT NOT NULL,
   signature     TEXT NOT NULL,
+  -- Cheap change-detection key (see scanLibrary): the book's directory
+  -- mtime plus its file count. Lets a rescan skip stat()ing every file of
+  -- an unchanged book, which on a large library is the bulk of scan I/O.
+  dirSig        TEXT,
   detailPending INTEGER NOT NULL DEFAULT 1,
   detailFailed  INTEGER NOT NULL DEFAULT 0,
   tagsFailed    INTEGER NOT NULL DEFAULT 0
@@ -32,14 +36,14 @@ CREATE TABLE IF NOT EXISTS folders (
 `;
 
 const UPSERT_SQL = `
-INSERT INTO books (id, kind, sourceDir, title, author, narrator, year, description, duration, cover, coverThumb, tracksJson, chaptersJson, signature, detailPending, detailFailed, tagsFailed)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO books (id, kind, sourceDir, title, author, narrator, year, description, duration, cover, coverThumb, tracksJson, chaptersJson, signature, dirSig, detailPending, detailFailed, tagsFailed)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   kind=excluded.kind, sourceDir=excluded.sourceDir, title=excluded.title, author=excluded.author,
   narrator=excluded.narrator, year=excluded.year, description=excluded.description, duration=excluded.duration,
   cover=excluded.cover, coverThumb=excluded.coverThumb, tracksJson=excluded.tracksJson, chaptersJson=excluded.chaptersJson,
-  signature=excluded.signature, detailPending=excluded.detailPending, detailFailed=excluded.detailFailed,
-  tagsFailed=excluded.tagsFailed
+  signature=excluded.signature, dirSig=excluded.dirSig, detailPending=excluded.detailPending,
+  detailFailed=excluded.detailFailed, tagsFailed=excluded.tagsFailed
 `;
 
 // -- thin promise wrappers around @vscode/sqlite3's callback API --
@@ -96,6 +100,7 @@ function rowToBook(row) {
     tracks: JSON.parse(row.tracksJson),
     chapters: JSON.parse(row.chaptersJson),
     signature: row.signature,
+    dirSig: row.dirSig ?? null,
     detailPending: Boolean(row.detailPending),
     detailFailed: Boolean(row.detailFailed),
     tagsFailed: Boolean(row.tagsFailed),
@@ -108,7 +113,8 @@ function bookToParams(book) {
     book.narrator ?? null, book.year ?? null, book.description ?? null,
     book.duration, book.cover ?? null, book.coverThumb ?? null,
     JSON.stringify(book.tracks ?? []), JSON.stringify(book.chapters ?? []),
-    book.signature, book.detailPending ? 1 : 0, book.detailFailed ? 1 : 0, book.tagsFailed ? 1 : 0,
+    book.signature, book.dirSig ?? null,
+    book.detailPending ? 1 : 0, book.detailFailed ? 1 : 0, book.tagsFailed ? 1 : 0,
   ];
 }
 
@@ -125,6 +131,12 @@ async function runSchema(db) {
   const columns = await all(db, 'PRAGMA table_info(books)');
   if (!columns.some((c) => c.name === 'coverThumb')) {
     await run(db, 'ALTER TABLE books ADD COLUMN coverThumb TEXT');
+  }
+  // Same self-correcting pattern for dirSig. Existing rows get NULL, which
+  // simply means "no cheap key yet" -- those books fall back to the full
+  // per-file check on the next scan and record one for the scan after.
+  if (!columns.some((c) => c.name === 'dirSig')) {
+    await run(db, 'ALTER TABLE books ADD COLUMN dirSig TEXT');
   }
   await run(db, 'PRAGMA journal_mode = DELETE');
   await run(db, 'PRAGMA synchronous = FULL');
@@ -228,6 +240,30 @@ class LibraryDb {
 
   get() {
     return { folders: this.#folders, books: [...this.#books.values()] };
+  }
+
+  /** O(1) single-book read, without get()'s full-array copy. */
+  getBook(id) {
+    return this.#books.get(id) ?? null;
+  }
+
+  /**
+   * O(1) single-book write, for the per-book update loops (detail fill,
+   * thumbnail backfill) that previously round-tripped through
+   * get()/set() once per book. That pattern cost O(total books) *per book*
+   * -- a full array copy, a findIndex scan, an array map, plus set()'s Set
+   * and Map rebuild -- which measured 5.5s of solid CPU and ~18,000
+   * large allocations across a 6,000-book library, all of it garbage-
+   * collected churn on the main thread while the UI was trying to stay
+   * responsive. Same cache-then-queue semantics as set(), just scoped to
+   * one row.
+   */
+  updateBook(book) {
+    if (this.#books.get(book.id) === book) return;
+    this.#books.set(book.id, book);
+    this.#pendingBooks.set(book.id, book);
+    this.#pendingBookDeletes.delete(book.id);
+    this.#queue(() => this.#drainPending());
   }
 
   /**

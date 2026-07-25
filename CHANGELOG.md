@@ -8,6 +8,61 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-25
+### Fixed
+- A background failure during a scan could terminate the app outright, with
+  no error and no window — it simply disappeared. Best-effort background
+  work (cover thumbnails, the scan/fill chain) now stays best-effort, and a
+  stray failure is logged rather than taking the app down with it.
+- Very large libraries (~6,000 books) burned several seconds of solid CPU
+  on bookkeeping alone during a scan — every finished book re-copied and
+  re-indexed the entire library list. Now updated in place: ~1,200x faster
+  on a 6,000-book library, and a large chunk of the scan-time CPU spike
+  and system stutter goes with it.
+- Scan and background-fill progress updates were sent to the window once per
+  book. On a large library the scan reaches ~800 books/second, so the window
+  was being asked to redraw its progress bar ~800 times a second — enough to
+  saturate it, stutter the whole system, and sometimes take the window down
+  with it (the app appearing to close itself mid-scan). Progress updates are
+  now coalesced to ~20/second: 63x fewer redraws on a 5,800-book library,
+  visually identical, with the final state always delivered so progress can
+  never appear stuck.
+- **Scanning a large library could freeze the app until Windows killed it.**
+  On a ~5,800-book library the scan would spike CPU, stop responding, and
+  the window would vanish part-way through — intermittently, so it sometimes
+  survived. Windows was reporting this as an application *hang*, not a
+  crash: the scan's inner loop never yielded to the message queue that keeps
+  a window responsive, so once it was running at full speed the UI was
+  starved until Windows declared the app dead. The scan now yields
+  regularly. Measured on the affected library: peak memory during a scan
+  dropped from 7.3GB (killed) to 843MB (reclaimed afterwards), and a scan
+  that previously died part-way now completes all 5,825 books in 8 seconds.
+- **Rescans no longer re-check every file of every book.** Deciding whether a
+  book had changed meant inspecting each of its files — around 80,000 file
+  checks on a ~5,800-book library, almost all of it in books split into
+  hundreds of tracks. That saturated the drive on every launch and was the
+  bulk of the scan's cost. A book's folder is now checked first, and its
+  files are only examined if the folder actually changed. Measured on the
+  affected library: a routine rescan dropped from 7.6s to 2.9s even with a
+  warm disk cache, and far more on a cold spinning drive where those checks
+  were seeks. If a file is edited in place without its folder changing (a
+  re-tag, say), File > Rescan library still does the full per-file check.
+- Scanning checked each book's files one at a time to decide whether it had
+  changed. Books split into hundreds of separate files (some libraries have
+  audiobooks with 300-500 tracks) therefore stalled the scan while several
+  hundred disk reads happened back-to-back, producing a pronounced CPU and
+  responsiveness dip part-way through every scan. Those checks now overlap,
+  the same way the rest of the scan already did.
+- Worker pool size reduced from 3 to 1. Parsing still runs entirely off the
+  UI thread (responsive, and a malicious file still can't hang the app),
+  but it no longer competes for multiple cores and disk queues at once
+  during a big first-run scan.
+- Added a diagnostic log (`diagnostic.log`, alongside your library data). It
+  records scan progress and, if any part of the app ever dies unexpectedly,
+  which part and why — so a future "it just closed itself" can be diagnosed
+  from evidence instead of guesswork. Set `MIDNIGHT_ATHENAEUM_DEBUG=1` for
+  detailed tracing when investigating something specific.
+
 ## [0.13.0] - 2026-07-24
 ### Added
 - **Listening stats** — a new Stats view (bar-chart icon in the top bar)

@@ -713,10 +713,40 @@ synthetic harness (real `ffmpeg`-generated `.m4b`/`.mp3` fixtures with
 actual chapter atoms and embedded art) before ever touching the real
 library, then confirmed faster hands-on.
 
-### 6. Worker-thread parsing — **S/M**
-Move metadata/chapter parsing into `worker_threads` so a first-run scan doesn't
-contend with the main process and the UI stays responsive. The scan is I/O bound
-today but CPU cost rises once loudness analysis and thumbnails are added.
+### 6. Worker-thread parsing — **attempted, reverted ❌**
+Moving tag/chapter parsing and cover-thumbnail generation into
+`worker_threads` was built, then removed. Recorded here because the premise
+was wrong in a way worth remembering.
+
+**The premise did not hold.** This item assumed scanning is CPU-bound. It
+isn't. Instrumenting a real ~5,800-book library showed a rescan dispatches
+**zero** tasks to the pool — every book is an unchanged cache hit, so nothing
+is ever parsed. Scanning is I/O-bound: its cost was `fs.stat` on every file
+of every book (~80,000 calls, concentrated in books split into 200-500
+tracks). The pool did nothing on a normal launch except exist.
+
+**It also broke the app.** Every build with the pool enabled spiked CPU and
+hung part-way through a scan until Windows killed the app (logged as
+Application Hang, event 1002). The same build with dispatch disabled ran
+clean, as did v0.13.0 before the pool existed — bisected by building and
+running both. Merely spawning the worker inside Electron's main process was
+enough; a plausible but untested explanation is the cost of instantiating
+`jimp`'s large dependency tree in a second V8 isolate inside that process.
+It never reproduced headlessly, only in the full app.
+
+**What was kept.** `src/main/parse-core.js` survives — the parse functions
+are cleaner extracted, and now run in-process. The real wins came from bugs
+the investigation exposed, none of which needed worker threads: O(1) database
+updates per book (was O(total books), 6.3s of CPU per scan on this library),
+coalesced progress IPC (5,825 renderer wakeups down to 93), a directory-mtime
+fast path that skips per-file checks for unchanged books, an event-loop yield
+so a fast scan can't starve the UI, and guards so a background failure can no
+longer terminate the app.
+
+**If revisited**, the case would have to come from genuinely CPU-bound work
+(loudness analysis, waveform precompute) rather than scanning, and would want
+process-level isolation (`utilityProcess`) rather than a thread sharing the
+main process.
 
 ### 7. Waveform / seek preview — **M**
 Precompute a coarse waveform per book for a richer seek bar and instant scrub
@@ -763,20 +793,23 @@ completely independent of file extension or the tag-declared picture
 format. A crafted audio file with malicious "cover art" bytes (ASF magic
 bytes, regardless of what extension/format the surrounding tag claims) would
 reach the vulnerable parser exactly the way the advisory describes — and
-since this runs synchronously on the main process's single thread, a genuine
-infinite loop there can't be escaped with a timeout (JS timers can't preempt
-a blocked event loop on the same thread) — it would hang the entire app, not
-just fail one book's thumbnail, until force-killed. Given this app already
-accepts arbitrary user-supplied audio files as its core input (and users
-audiobook-shopping outside official stores is a realistic path for a
-maliciously-crafted file to arrive), this is real exposure, not a
-theoretical one — worth weighing against "Worker-thread parsing" below,
-which would also contain a hang like this to a killable subprocess instead
-of the main process. Still deferred (the fix is `jimp` 1.x, a breaking
+at the time this was written, that decode ran synchronously on the main
+process's single thread — a genuine infinite loop there couldn't be escaped
+with a timeout (JS timers can't preempt a blocked event loop on the same
+thread), so it would have hung the entire app, not just failed one book's
+thumbnail, until force-killed. Given this app already accepts arbitrary
+user-supplied audio files as its core input (and users audiobook-shopping
+outside official stores is a realistic path for a maliciously-crafted file
+to arrive), this was real exposure, not a theoretical one.
+**Still unmitigated**: containing this was the main argument for
+"Worker-thread parsing" above, which was attempted and reverted (it broke the
+app and, on a real library, never parsed anything). So a malicious cover can
+still hang the main process. The underlying `file-type`/ASF parser
+bug itself is still unpatched upstream (the fix is `jimp` 1.x, a breaking
 rewrite the three call sites — `generateCoverThumb`,
 `scripts/make-icons.cjs`, `scripts/make-media-icons.cjs` — would all need
-re-verifying against, not a blind `npm audit fix --force`), but flagged
-here with its real severity rather than a false reassurance.
+re-verifying against, not a blind `npm audit fix --force`), so this stays
+flagged rather than closed — containment isn't the same as a fix.
 
 ---
 

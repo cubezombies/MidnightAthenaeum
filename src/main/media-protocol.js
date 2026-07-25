@@ -3,7 +3,6 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
-const { Readable } = require('node:stream');
 const { protocol } = require('electron');
 
 const { COVER_CACHE, ONLINE_COVER_CACHE } = require('./paths');
@@ -26,6 +25,63 @@ const MIME_TYPES = {
 
 function encodePath(filePath) {
   return Buffer.from(filePath, 'utf8').toString('base64url');
+}
+
+// Bounded buffer between the file and the renderer. An audiobook file is
+// routinely hundreds of MB and can exceed a gigabyte.
+const STREAM_CHUNK = 256 * 1024;
+const STREAM_HIGH_WATER = 2 * 1024 * 1024;
+
+/**
+ * A file as a web ReadableStream that actually honours backpressure.
+ *
+ * This replaces `Readable.toWeb(createReadStream(...))`. That adapter does
+ * not reliably propagate the consumer's backpressure to the file handle, so
+ * serving a large audio file could read it into native memory as fast as the
+ * disk allowed, whether or not the renderer was consuming it. Diagnostics
+ * from a real crash showed exactly that signature: resident memory climbing
+ * ~250MB/s (roughly the drive's sequential read speed) to 7.3GB and the
+ * process being killed, while the JS heap stayed flat at ~130MB the entire
+ * time -- i.e. memory that no JS-level fix could ever have reached. It also
+ * saturated the drive, which starved the concurrent library scan (cache-hit
+ * books that normally take ~10ms were taking seconds).
+ *
+ * Here the source is paused as soon as the consumer's queue is full and only
+ * resumed on pull(), so at most ~2MB is ever held in memory regardless of
+ * file size.
+ */
+function fileWebStream(filePath, { start, end } = {}) {
+  const nodeStream = fs.createReadStream(filePath, { start, end, highWaterMark: STREAM_CHUNK });
+  let closed = false;
+
+  return new ReadableStream({
+    start(controller) {
+      nodeStream.on('data', (chunk) => {
+        if (closed) return;
+        controller.enqueue(chunk);
+        if (controller.desiredSize !== null && controller.desiredSize <= 0) nodeStream.pause();
+      });
+      nodeStream.on('end', () => {
+        if (closed) return;
+        closed = true;
+        controller.close();
+      });
+      nodeStream.on('error', (err) => {
+        if (closed) return;
+        closed = true;
+        controller.error(err);
+      });
+    },
+    pull() {
+      nodeStream.resume();
+    },
+    cancel() {
+      // The renderer seeking or switching books aborts the request; without
+      // destroying the handle the read would continue in the background.
+      closed = true;
+      nodeStream.destroy();
+    },
+  }, new ByteLengthQueuingStrategy({ highWaterMark: STREAM_HIGH_WATER }));
 }
 
 function mediaUrl(filePath) {
@@ -52,7 +108,7 @@ function isInside(parent, child) {
  * `getAllowedRoots` is consulted per request so this can never be used to read
  * files outside the folders the user actually added to their library.
  */
-function registerMediaProtocol(getAllowedRoots) {
+function registerMediaProtocol(getAllowedRoots, onRequest) {
   protocol.handle(SCHEME, async (request) => {
     let filePath;
     try {
@@ -105,8 +161,8 @@ function registerMediaProtocol(getAllowedRoots) {
           });
         }
 
-        const stream = fs.createReadStream(filePath, { start, end });
-        return new Response(Readable.toWeb(stream), {
+        onRequest?.({ filePath, size: stat.size, start, end, ranged: true });
+        return new Response(fileWebStream(filePath, { start, end }), {
           status: 206,
           headers: {
             'Content-Type': contentType,
@@ -121,7 +177,8 @@ function registerMediaProtocol(getAllowedRoots) {
       }
     }
 
-    return new Response(Readable.toWeb(fs.createReadStream(filePath)), {
+    onRequest?.({ filePath, size: stat.size, ranged: false });
+    return new Response(fileWebStream(filePath), {
       status: 200,
       headers: {
         'Content-Type': contentType,
@@ -133,4 +190,7 @@ function registerMediaProtocol(getAllowedRoots) {
   });
 }
 
-module.exports = { registerScheme, registerMediaProtocol, mediaUrl, SCHEME };
+// fileWebStream is exported for testing: the backpressure behaviour it fixes
+// is the difference between bounded memory and reading a whole audiobook into
+// RAM, and that is worth being able to assert on directly.
+module.exports = { registerScheme, registerMediaProtocol, mediaUrl, SCHEME, fileWebStream };

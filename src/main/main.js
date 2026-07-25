@@ -27,6 +27,99 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
+/**
+ * Crash/diagnostic log at DATA_ROOT/diagnostic.log.
+ *
+ * A desktop app that dies mid-scan gives the user nothing to report but "it
+ * closed itself" -- and when the *renderer* is what died, the main process
+ * often survives long enough that no console output exists at all, which is
+ * exactly the dead end this app hit in testing. Electron does know why a
+ * process went away (render-process-gone / child-process-gone carry a
+ * reason and exit code), and app.getAppMetrics() attributes CPU and memory
+ * per Electron process, so this records both to disk. Append-only, tiny,
+ * best-effort: diagnostics must never themselves break a launch.
+ */
+const DIAG_FILE = path.join(DATA_ROOT, 'diagnostic.log');
+function diag(message) {
+  try {
+    fs.appendFileSync(DIAG_FILE, `${new Date().toISOString()} ${message}\n`);
+  } catch {
+    // Never let logging failures affect the app.
+  }
+}
+
+/**
+ * Breakdown of *this* process's memory. Which bucket grows is the whole
+ * question: JS heap growth means retained JS objects, while external /
+ * arrayBuffers growth means native Buffers (file reads, image data) that a
+ * heap profile would not even show. Reproductions so far (worker disabled,
+ * no window, window + IPC) all stayed flat, so the app itself has to report
+ * this.
+ */
+function memLine() {
+  const m = process.memoryUsage();
+  const mb = (b) => Math.round(b / 1024 / 1024);
+  return `rss=${mb(m.rss)}MB heap=${mb(m.heapUsed)}/${mb(m.heapTotal)}MB ext=${mb(m.external)}MB ab=${mb(m.arrayBuffers)}MB`;
+}
+
+/** Per-Electron-process CPU/memory, so a spike can be attributed to a specific process rather than guessed at. */
+function diagMetrics(tag) {
+  try {
+    const rows = app.getAppMetrics().map((m) => {
+      const cpu = m.cpu?.percentCPUUsage ?? 0;
+      const ws = Math.round((m.memory?.workingSetSize ?? 0) / 1024);
+      return `${m.type}${m.serviceName ? `(${m.serviceName})` : ''} pid=${m.pid} cpu=${cpu.toFixed(0)}% ws=${ws}MB`;
+    });
+    diag(`${tag} [${memLine()}] media=${mediaRequestCount}req/${Math.round(mediaBytesServed / 1024 / 1024)}MB | ${rows.join(' | ')}`);
+  } catch (err) {
+    diag(`${tag} [${memLine()}] | metrics unavailable: ${err.message}`);
+  }
+}
+
+// Dense, always-on memory timeline. The crash is a runaway allocation that
+// none of the isolated reproductions trigger, so the shape and onset of the
+// growth -- and whether it continues once the scan is over -- has to be
+// observed in the real app. One tiny line per second, unref'd so it never
+// holds the process open.
+let mediaBytesServed = 0;
+let mediaRequestCount = 0;
+
+// Verbose tracing (per-second memory ticks, per-book scan detail, media
+// request volume). Off by default -- it was what identified the scan hang,
+// and is kept behind a flag so the same investigation is repeatable without
+// shipping the noise. Enable with MIDNIGHT_ATHENAEUM_DEBUG=1.
+const DIAG_VERBOSE = process.env.MIDNIGHT_ATHENAEUM_DEBUG === '1';
+if (DIAG_VERBOSE) {
+  setInterval(() => diag(`tick [${memLine()}] mediaServed=${Math.round(mediaBytesServed / 1024 / 1024)}MB/${mediaRequestCount}req`), 1000).unref?.();
+}
+
+app.on('render-process-gone', (_event, _webContents, details) => {
+  diag(`!!! RENDER-PROCESS-GONE reason=${details.reason} exitCode=${details.exitCode}`);
+  diagMetrics('at-render-gone');
+});
+app.on('child-process-gone', (_event, details) => {
+  diag(`!!! CHILD-PROCESS-GONE type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name ?? ''}`);
+  diagMetrics('at-child-gone');
+});
+process.on('uncaughtException', (err) => {
+  diag(`!!! UNCAUGHT EXCEPTION ${err && err.stack ? err.stack : err}`);
+});
+
+// Last-resort guard. Node terminates the process on an unhandled rejection,
+// which for a desktop app means the window simply vanishes mid-use with no
+// explanation -- a real user hit exactly that when a background fill pass
+// started rejecting (see runThumbnailFill / library.generateCoverThumb).
+// Those individual paths are fixed at the source, but a background
+// best-effort pass should never be able to take the whole app down, so this
+// converts any stray rejection into a logged warning instead of an exit.
+// Deliberately not swallowing 'uncaughtException' the same way: a genuine
+// synchronous crash leaves state unknown, where continuing is riskier than
+// stopping.
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandled promise rejection (continuing):', reason);
+  diag(`!!! UNHANDLED REJECTION ${reason && reason.stack ? reason.stack : reason}`);
+});
+
 // Chromium doesn't create this directory itself — it just writes into
 // whatever setPath points at, and fails silently-ish (DevToolsActivePort
 // write errors, likely worse elsewhere) if it doesn't exist yet. Only shows
@@ -711,12 +804,40 @@ function buildMenu() {
  * picked up again later.
  */
 function writeDetailUpdate(updated) {
-  const s = libraryStore.get();
-  const idx = s.books.findIndex((b) => b.id === updated.id);
-  if (idx === -1) return false;
-  if (s.books[idx].signature !== updated.signature) return false;
-  libraryStore.set({ ...s, books: s.books.map((b, i) => (i === idx ? updated : b)) });
+  // O(1) via getBook/updateBook rather than get()/findIndex/map/set(), which
+  // was O(total books) *per book* -- fine when phase 2 was slow enough to
+  // hide it, a measurable main-thread CPU burn (5.5s across a 6,000-book
+  // library) once worker threads made detail fill fast enough to run this
+  // loop back-to-back.
+  const current = libraryStore.getBook(updated.id);
+  if (!current) return false;
+  if (current.signature !== updated.signature) return false;
+  libraryStore.updateBook(updated);
   return true;
+}
+
+// Progress channels are per-item: scan fires once per book, and the three
+// background fills fire once per book each. Measured against the real
+// ~5,800-book library, phase 1's cache-hit path alone runs at ~800
+// books/second, so that was ~800 IPC messages/second at the renderer, each
+// one running renderScanStatus() plus class/style writes -- sustained
+// layout thrash that pegged the renderer and could take it (and so the
+// window) down entirely. Nothing about the *content* of these events needs
+// per-item fidelity: they only move a progress bar, so coalescing to ~20/s
+// is visually identical and costs the renderer ~40x less.
+//
+// This was always latent; it only became harmful once parsing moved to a
+// worker thread and stopped pacing the loop -- the same way the O(n)
+// writeDetailUpdate did. Terminal events (start, finish, and the
+// active:false/scanning:false transitions) are always forced through, so
+// the UI can never be left stuck showing a stale "still scanning" state.
+const PROGRESS_MIN_INTERVAL_MS = 50;
+const lastProgressSend = new Map();
+function sendProgress(channel, payload, { force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - (lastProgressSend.get(channel) ?? 0) < PROGRESS_MIN_INTERVAL_MS) return;
+  lastProgressSend.set(channel, now);
+  mainWindow?.webContents.send(channel, payload);
 }
 
 let detailFillRunning = false;
@@ -756,7 +877,7 @@ function runDetailFill() {
     lastFlush = Date.now();
   };
 
-  mainWindow?.webContents.send('library:detailProgress', { done, total: pendingCount, active: true });
+  sendProgress('library:detailProgress', { done, total: pendingCount, active: true }, { force: true });
 
   detailFillPromise = library.fillBookDetails(state.books, {
     isCancelled: () => token.cancelled,
@@ -765,12 +886,12 @@ function runDetailFill() {
       done += 1;
       batch.push(updated);
       if (batch.length >= 25 || Date.now() - lastFlush > 1000) flush();
-      mainWindow?.webContents.send('library:detailProgress', { done, total: pendingCount, active: true });
+      sendProgress('library:detailProgress', { done, total: pendingCount, active: true });
     },
   }).finally(() => {
     flush();
     detailFillRunning = false;
-    mainWindow?.webContents.send('library:detailProgress', { done, total: pendingCount, active: false });
+    sendProgress('library:detailProgress', { done, total: pendingCount, active: false }, { force: true });
   });
 
   return detailFillPromise;
@@ -833,7 +954,7 @@ function runPairingFill() {
     lastFlush = Date.now();
   };
 
-  mainWindow?.webContents.send('library:pairingProgress', { done, total: unchecked.length, active: true });
+  sendProgress('library:pairingProgress', { done, total: unchecked.length, active: true }, { force: true });
 
   pairingFillPromise = (async () => {
     for (const book of unchecked) {
@@ -844,12 +965,12 @@ function runPairingFill() {
       done += 1;
       batch.push(book.id);
       if (batch.length >= 25 || Date.now() - lastFlush > 1000) flush();
-      mainWindow?.webContents.send('library:pairingProgress', { done, total: unchecked.length, active: true });
+      sendProgress('library:pairingProgress', { done, total: unchecked.length, active: true });
     }
   })().finally(() => {
     flush();
     pairingFillRunning = false;
-    mainWindow?.webContents.send('library:pairingProgress', { done, total: unchecked.length, active: false });
+    sendProgress('library:pairingProgress', { done, total: unchecked.length, active: false }, { force: true });
   });
 
   return pairingFillPromise;
@@ -896,7 +1017,7 @@ function runThumbnailFill() {
     lastFlush = Date.now();
   };
 
-  mainWindow?.webContents.send('library:thumbnailProgress', { done, total: pending.length, active: true });
+  sendProgress('library:thumbnailProgress', { done, total: pending.length, active: true }, { force: true });
 
   thumbnailFillPromise = (async () => {
     for (const book of pending) {
@@ -907,18 +1028,24 @@ function runThumbnailFill() {
       done += 1;
       batch.push(book.id);
       if (batch.length >= 25 || Date.now() - lastFlush > 1000) flush();
-      mainWindow?.webContents.send('library:thumbnailProgress', { done, total: pending.length, active: true });
+      sendProgress('library:thumbnailProgress', { done, total: pending.length, active: true });
     }
   })().finally(() => {
     flush();
     thumbnailFillRunning = false;
-    mainWindow?.webContents.send('library:thumbnailProgress', { done, total: pending.length, active: false });
+    sendProgress('library:thumbnailProgress', { done, total: pending.length, active: false }, { force: true });
   });
 
   return thumbnailFillPromise;
 }
 
-async function runScan() {
+/**
+ * `deep` forces the full per-file check instead of the directory-mtime fast
+ * path (see scanLibrary). Automatic scans -- launch, folder added -- use the
+ * fast path; an explicit "Rescan library" is the escape hatch for the one
+ * case the fast path can miss, a file rewritten in place under the same name.
+ */
+async function runScan({ deep = false } = {}) {
   if (scanning) return;
   await stopDetailFill(); // phase 2 must fully quiesce before we read the cache snapshot below
   await stopPairingFill();
@@ -931,24 +1058,67 @@ async function runScan() {
   }
 
   scanning = true;
-  mainWindow?.webContents.send('library:scan-progress', { done: 0, total: 0, scanning: true });
+  sendProgress('library:scan-progress', { done: 0, total: 0, scanning: true }, { force: true });
+
+  diag(`scan: starting, ${state.books.length} cached books`);
+  diagMetrics('scan-start');
+  let lastDiag = 0;
 
   try {
-    const books = await scanLibrary(state.folders, state.books, (done, total) => {
-      mainWindow?.webContents.send('library:scan-progress', { done, total, scanning: true });
-    });
+    let lastRssMB = 0;
+    const books = await scanLibrary(state.folders, state.books, (done, total, info) => {
+      // Throttled: the cache-hit path reaches ~800 books/second on a large
+      // library, and an unthrottled send here was the single biggest source
+      // of renderer load during a launch scan.
+      sendProgress('library:scan-progress', { done, total, scanning: true }, { force: done === total });
+
+      // Name any book that is individually expensive, or that coincides with
+      // a jump in memory. The app died mid-scan with the main process at
+      // 5.2GB and climbing, so the question is specifically *which* books
+      // allocate that -- a per-500 summary can't answer it.
+      const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
+      const grew = rssMB - lastRssMB;
+      if (DIAG_VERBOSE && info && (info.ms > 400 || grew > 100)) {
+        diag(`heavy book #${done} ${info.ms}ms [${memLine()}] (+${grew}MB) files=${info.files} kind=${info.kind} cacheHit=${info.cacheHit} :: ${info.dir}`);
+      }
+      if (grew > 100 || rssMB < lastRssMB - 200) lastRssMB = rssMB;
+
+      // One line per 500 books: cheap, and it is what makes a future
+      // "it froze part-way through scanning" report diagnosable at all.
+      if (done - lastDiag >= 500 || done === total) {
+        lastDiag = done;
+        diagMetrics(`scan ${done}/${total}`);
+      }
+    }, { deep });
+    diag(`scan: built ${books.length} books, persisting`);
     libraryStore.set({ ...libraryStore.get(), books });
+    diag('scan: persisted');
   } catch (err) {
     console.error('[scan] failed:', err);
+    diag(`scan: FAILED ${err && err.stack ? err.stack : err}`);
     dialog.showErrorBox('Scan failed', err.message);
   } finally {
     scanning = false;
-    mainWindow?.webContents.send('library:scan-progress', { done: 0, total: 0, scanning: false });
+    diagMetrics('scan-end');
+    sendProgress('library:scan-progress', { done: 0, total: 0, scanning: false }, { force: true });
+    // Full library payload to the renderer -- on a large library this is the
+    // single biggest IPC message the app ever sends, so it's worth knowing
+    // whether the app died immediately before, during, or after it.
+    diag('scan: sending library:changed (full payload)');
     mainWindow?.webContents.send('library:changed', currentState());
+    diag('scan: library:changed sent');
     refreshJumpList(); // a removed/renamed book could be sitting in the list
     // Background phase 2, then ebook-pairing fill, then thumbnail backfill --
-    // all fire-and-forget from here.
-    runDetailFill().then(() => runPairingFill()).then(() => runThumbnailFill());
+    // all fire-and-forget from here. The .catch() is not optional: this
+    // chain is never awaited, so without it any rejection inside these
+    // passes becomes an unhandled rejection, which terminates the main
+    // process on Electron's Node. These are all best-effort background
+    // passes -- a failure means some books stay unfilled until the next
+    // scan, which must never take the app down with it.
+    runDetailFill()
+      .then(() => runPairingFill())
+      .then(() => runThumbnailFill())
+      .catch((err) => console.error('[scan] background fill failed:', err));
   }
 }
 
@@ -1011,7 +1181,9 @@ function registerIpc() {
     return currentState();
   });
 
-  ipcMain.handle('library:rescan', () => { runScan(); return currentState(); });
+  // An explicit rescan is the user saying "I changed something, look properly"
+  // -- so it does the full per-file check rather than the fast path.
+  ipcMain.handle('library:rescan', () => { runScan({ deep: true }); return currentState(); });
 
   /**
    * Fast-tracks one book's phase-2 detail fill (cover/chapters) for when the
@@ -1664,7 +1836,21 @@ app.whenReady().then(async () => {
       libraryStore.flush();
     }
   }
-  registerMediaProtocol(getAllowedRoots);
+  // Logged so a memory/disk spike can be correlated against what the
+  // renderer actually asked for -- serving a large audio file was invisible
+  // in every earlier diagnostic despite being the thing saturating the drive.
+  registerMediaProtocol(getAllowedRoots, ({ filePath, size, start, end, ranged }) => {
+    // Counted for *every* request, covers included. An earlier version of
+    // this only counted files over 5MB, which made thousands of cover reads
+    // invisible -- and the cover cache lives on the data drive, which was
+    // observed pegged at 91% while the library drive sat idle.
+    const bytes = ranged ? (end - start + 1) : size;
+    mediaBytesServed += bytes;
+    mediaRequestCount += 1;
+    if (!DIAG_VERBOSE || size < 5 * 1024 * 1024) return;
+    const span = ranged ? `${start}-${end}` : 'FULL FILE';
+    diag(`media request #${mediaRequestCount}: ${span} = ${Math.round(bytes / 1024 / 1024)}MB of ${Math.round(size / 1024 / 1024)}MB file | cumulative served=${Math.round(mediaBytesServed / 1024 / 1024)}MB :: ${path.basename(filePath)}`);
+  });
   registerIpc();
   buildMenu();
   createWindow();

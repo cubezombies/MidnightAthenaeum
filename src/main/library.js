@@ -1,18 +1,14 @@
 'use strict';
 
-const crypto = require('node:crypto');
-const fsp = require('node:fs/promises');
 const path = require('node:path');
-const Jimp = require('jimp');
+const fsp = require('node:fs/promises');
 
 const { COVER_CACHE } = require('./paths');
-const { readMp4Duration, readMp4Chapters } = require('./mp4-chapters');
-const { chaptersFromCue, hasSiblingCue } = require('./cue');
+const { readMp4Duration } = require('./mp4-chapters');
 const { groupIntoBooks, naturalCompare } = require('./group');
+const { hashId, mapLimit, unitSignature, statFiles, runTask } = require('./parse-core');
 
 const AUDIO_EXTENSIONS = new Set(['.m4b', '.m4a', '.mp3', '.aac', '.ogg', '.opus', '.flac', '.wav']);
-const IMAGE_NAMES = ['cover', 'folder', 'front', 'album', 'artwork'];
-const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png'];
 const SKIP_DIRS = new Set(['node_modules', '$RECYCLE.BIN', 'System Volume Information']);
 // Scanning is I/O bound on the library drive, so overlapping reads matters far
 // more than CPU — but *how* they overlap matters differently depending on the
@@ -40,15 +36,22 @@ const DETAIL_CONCURRENCY = 1;
 const SELF_CONTAINED_EXT = new Set(['.m4b', '.m4a']);
 const PART_MEDIAN_MAX_SEC = 80 * 60;
 
-// music-metadata is ESM-only; this main process is CommonJS.
-let mmPromise = null;
-function loadMusicMetadata() {
-  if (!mmPromise) mmPromise = import('music-metadata');
-  return mmPromise;
-}
-
-function hashId(value) {
-  return crypto.createHash('sha1').update(value.toLowerCase()).digest('hex').slice(0, 16);
+/**
+ * Runs one parse task (tag/chapter read, cover thumbnail) in-process.
+ *
+ * Parsing briefly lived in a `worker_threads` pool, on the theory that
+ * scanning was CPU-bound. Measurement said otherwise: a rescan of this
+ * developer's ~5,800-book library dispatched *zero* tasks to the pool --
+ * every book was an unchanged cache hit -- so the pool did nothing on a
+ * normal launch except exist. Worse, merely spawning it inside Electron's
+ * main process reliably spiked CPU and hung the app part-way through a
+ * scan; the same build with dispatch disabled ran clean, as did v0.13.0
+ * before the pool existed. Since the measured benefit was nil and the cost
+ * was a hang, the pool is gone. parse-core.js stays: the extraction is
+ * worth keeping on its own, and it is where these functions live now.
+ */
+function runParse(type, payload) {
+  return runTask(type, payload, { coverCache: COVER_CACHE });
 }
 
 async function* walk(dir, depth = 0) {
@@ -69,322 +72,6 @@ async function* walk(dir, depth = 0) {
       yield full;
     }
   }
-}
-
-/** Run an async mapper over items with a bounded number in flight. */
-async function mapLimit(items, limit, fn) {
-  const results = new Array(items.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor++;
-      results[index] = await fn(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-async function readTags(filePath, wantCover) {
-  try {
-    const { parseFile } = await loadMusicMetadata();
-    const md = await parseFile(filePath, { duration: true, skipCovers: !wantCover });
-    return { common: md.common ?? {}, format: md.format ?? {} };
-  } catch (err) {
-    // Some files have malformed tables music-metadata refuses; we still want them.
-    console.warn(`[library] tag read failed for ${path.basename(filePath)}: ${err.message}`);
-    return { common: {}, format: {}, failed: true };
-  }
-}
-
-async function cacheCoverFromPicture(id, picture) {
-  if (!picture) return null;
-  const ext = picture.format?.includes('png') ? '.png' : '.jpg';
-  const target = path.join(COVER_CACHE, `${id}${ext}`);
-  try {
-    await fsp.mkdir(COVER_CACHE, { recursive: true });
-    await fsp.writeFile(target, Buffer.from(picture.data));
-    return target;
-  } catch (err) {
-    console.warn(`[library] could not cache cover ${id}: ${err.message}`);
-    return null;
-  }
-}
-
-/**
- * A small (~200px wide) JPEG copy of a book's cover, always written to
- * COVER_CACHE regardless of where `sourcePath` actually lives -- it can be
- * an external folder image sitting in the user's library folder
- * (findFolderImage returns that path in place, never copies it), and this
- * must never write into a folder the app doesn't own. Best-effort, same
- * precedent as cacheCoverFromPicture/tagsFailed elsewhere in this file: a
- * corrupt or unsupported source image just means no thumbnail, not a
- * failed scan -- the grid falls back to the full-size cover for that book.
- */
-async function generateCoverThumb(id, sourcePath) {
-  if (!sourcePath) return null;
-  const target = path.join(COVER_CACHE, `${id}-thumb.jpg`);
-  try {
-    const img = await Jimp.read(sourcePath);
-    await fsp.mkdir(COVER_CACHE, { recursive: true });
-    await img.resize(200, Jimp.AUTO, Jimp.RESIZE_BICUBIC).quality(82).writeAsync(target);
-    return target;
-  } catch (err) {
-    console.warn(`[library] could not generate cover thumbnail for ${id}: ${err.message}`);
-    return null;
-  }
-}
-
-/** Fall back to a cover image sitting next to the audio. */
-async function findFolderImage(dir) {
-  let entries;
-  try {
-    entries = await fsp.readdir(dir, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-  const images = entries
-    .filter((e) => e.isFile() && IMAGE_EXTENSIONS.includes(path.extname(e.name).toLowerCase()))
-    .map((e) => e.name);
-  if (!images.length) return null;
-
-  const preferred = images.find((name) =>
-    IMAGE_NAMES.includes(path.parse(name).name.toLowerCase()));
-  return path.join(dir, preferred ?? images.sort(naturalCompare)[0]);
-}
-
-function cleanText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function titleFromFileName(name) {
-  return name.replace(/[_.]+/g, ' ').replace(/\s+/g, ' ').trim();
-}
-
-// A file-level `title` tag that reads like a chapter marker ("Opening Credits",
-// "Chapter 1", "03 - …") is the first chapter leaking through, not the book name.
-const CHAPTER_LIKE = /(opening|end) credits|\bchapters?\b|\btrack\s*\d|\bprologue\b|\bepilogue\b|^\s*\d+\s*[-.]/i;
-
-/**
- * Best display title for a self-contained book. Prefer the specific `title`
- * (distinguishes volumes that share a series-name `album`), but fall back to
- * `album` when `title` looks like a chapter and `album` doesn't.
- */
-function pickBookTitle(common, fallbackName) {
-  const title = cleanText(common.title);
-  const album = cleanText(common.album);
-  if (title && !CHAPTER_LIKE.test(title)) return title;
-  if (album && !CHAPTER_LIKE.test(album)) return album;
-  return title || album || titleFromFileName(fallbackName);
-}
-
-/** Build a signature so an unchanged book can be reused from cache. */
-function unitSignature(stats) {
-  return stats.map((s) => `${s.filePath}:${s.mtimeMs}:${s.size}`).join('|');
-}
-
-async function statFiles(files) {
-  const stats = [];
-  for (const filePath of files) {
-    try {
-      const s = await fsp.stat(filePath);
-      stats.push({ filePath, mtimeMs: s.mtimeMs, size: s.size });
-    } catch {
-      // File vanished between walk and stat; skip it.
-    }
-  }
-  return stats;
-}
-
-/**
- * Phase 1 build for a single-file (.m4b/.m4a/lone .mp3) book: tags + duration
- * only. Cover art and chapters are deliberately deferred to fillOneBookDetail
- * (phase 2, see below) — the cover picture is real bytes music-metadata would
- * otherwise decode for every book on every scan, and chapter extraction is
- * the expensive part of readMp4Chapters (one extra disk read per chapter).
- * `readMp4Duration` gets the fallback duration for files music-metadata can't
- * read without paying for any of that.
- */
-async function buildSingleFileBook(unit, stats, id) {
-  const filePath = stats[0].filePath;
-  const ext = path.extname(filePath).toLowerCase();
-
-  const [tags, mp4Duration] = await Promise.all([
-    readTags(filePath, false),
-    ext === '.m4b' || ext === '.m4a' ? readMp4Duration(filePath) : Promise.resolve(0),
-  ]);
-
-  const duration = tags.format.duration || mp4Duration || 0;
-
-  return {
-    id,
-    kind: 'single',
-    sourceDir: unit.dir,
-    title: pickBookTitle(tags.common, unit.name),
-    author: cleanText(tags.common.albumartist) || cleanText(tags.common.artist) || 'Unknown author',
-    narrator: cleanText(tags.common.composer?.[0]) || null,
-    year: tags.common.year ?? null,
-    description: cleanText(tags.common.comment?.[0]?.text) || null,
-    duration,
-    cover: null,
-    chapters: [],
-    tracks: [{ filePath, duration, title: titleFromFileName(unit.name) }],
-    signature: unitSignature(stats),
-    detailPending: true,
-    // Surfaces readTags()'s failure flag at the book level (previously computed
-    // and then discarded) so a scan can report how many books it couldn't
-    // actually read tags for, instead of that only being visible per-file in
-    // the console warning.
-    tagsFailed: Boolean(tags.failed),
-  };
-}
-
-/**
- * Phase 1 build for a multi-track (mp3-folder) book. Unlike the single-file
- * case, chapters fall out for free here — one per track, from the same tag
- * reads duration already needs — so only cover art is deferred to phase 2.
- */
-async function buildMultiTrackBook(unit, stats, id) {
-  const parsed = await mapLimit(stats, TRACK_CONCURRENCY, async (s) =>
-    ({ ...s, tags: await readTags(s.filePath, false) }));
-
-  const first = parsed[0];
-  const tracks = [];
-  const chapters = [];
-  let elapsed = 0;
-
-  for (const entry of parsed) {
-    const duration = entry.tags.format.duration || 0;
-    const title = cleanText(entry.tags.common.title)
-      || titleFromFileName(path.parse(entry.filePath).name);
-
-    tracks.push({ filePath: entry.filePath, duration, title });
-    chapters.push({
-      index: chapters.length,
-      title,
-      start: elapsed,
-      end: elapsed + duration,
-    });
-    elapsed += duration;
-  }
-
-  let chapterList = chapters;
-  // A lone audio file (e.g. one big .mp3) is just one "chapter"; if it ships a
-  // sibling .cue, use that to give it real chapters.
-  if (tracks.length === 1 && await hasSiblingCue(tracks[0].filePath)) {
-    const cueChapters = await chaptersFromCue(tracks[0].filePath, elapsed);
-    if (cueChapters.length > 1) chapterList = cueChapters;
-  }
-
-  return {
-    id,
-    kind: 'multi',
-    sourceDir: unit.dir,
-    title: cleanText(first?.tags.common.album) || titleFromFileName(unit.name),
-    author: cleanText(first?.tags.common.albumartist)
-      || cleanText(first?.tags.common.artist)
-      || 'Unknown author',
-    narrator: cleanText(first?.tags.common.composer?.[0]) || null,
-    year: first?.tags.common.year ?? null,
-    description: cleanText(first?.tags.common.comment?.[0]?.text) || null,
-    duration: elapsed,
-    cover: null,
-    chapters: chapterList,
-    tracks,
-    signature: unitSignature(stats),
-    detailPending: true,
-    tagsFailed: parsed.some((p) => p.tags.failed),
-  };
-}
-
-/**
- * Phase 2: fill in what phase 1 deferred for one book — cover art always,
- * plus real chapters for a single-file book (multi-track books already got
- * theirs for free in phase 1). Re-reads the file(s), so this is real extra
- * I/O — deliberately not paid at scan time, only here, lazily.
- */
-async function fillOneBookDetail(book) {
-  const filePath = book.tracks[0].filePath;
-
-  if (book.kind === 'single') {
-    const ext = path.extname(filePath).toLowerCase();
-    const [tags, mp4] = await Promise.all([
-      readTags(filePath, true),
-      ext === '.m4b' || ext === '.m4a'
-        ? readMp4Chapters(filePath, book.duration)
-        : Promise.resolve({ chapters: [], duration: book.duration }),
-    ]);
-
-    let chapters = mp4.chapters.map((ch, i, all) => ({
-      index: i,
-      title: ch.title,
-      start: ch.start,
-      end: all[i + 1] ? all[i + 1].start : book.duration || null,
-    }));
-
-    if (chapters.length <= 1 && await hasSiblingCue(filePath)) {
-      const cueChapters = await chaptersFromCue(filePath, book.duration);
-      if (cueChapters.length > 1) chapters = cueChapters;
-    }
-
-    let cover = await cacheCoverFromPicture(book.id, tags.common.picture?.[0]);
-    if (!cover) cover = await findFolderImage(book.sourceDir);
-    const coverThumb = await generateCoverThumb(book.id, cover);
-
-    return {
-      ...book,
-      cover,
-      coverThumb,
-      chapters,
-      tracks: [{ ...book.tracks[0], title: chapters.length ? null : book.tracks[0].title }],
-      detailPending: false,
-    };
-  }
-
-  // multi: chapters are already final from phase 1, only cover was deferred.
-  const tags = await readTags(filePath, true);
-  let cover = await cacheCoverFromPicture(book.id, tags.common.picture?.[0]);
-  if (!cover) cover = await findFolderImage(book.sourceDir);
-  const coverThumb = await generateCoverThumb(book.id, cover);
-  return { ...book, cover, coverThumb, detailPending: false };
-}
-
-// bookId -> Promise<book>, shared between the background fill loop and any
-// on-demand request (a book opened before the background loop reaches it) so
-// the same book is never detail-filled twice concurrently.
-const detailInFlight = new Map();
-
-/** Fills in one book's detail if it isn't already, de-duped against concurrent callers. */
-function ensureDetail(book) {
-  if (!book.detailPending) return Promise.resolve(book);
-  let p = detailInFlight.get(book.id);
-  if (!p) {
-    p = fillOneBookDetail(book)
-      .catch((err) => {
-        console.warn(`[library] detail fill failed for ${book.sourceDir}: ${err.message}`);
-        // Best-effort, same precedent as tagsFailed above: don't retry forever
-        // on every launch. A real rescan (changed signature) will try again.
-        return { ...book, detailPending: false, detailFailed: true };
-      })
-      .finally(() => detailInFlight.delete(book.id));
-    detailInFlight.set(book.id, p);
-  }
-  return p;
-}
-
-/**
- * Background pass: fills in every still-pending book's detail, at a
- * deliberately gentle concurrency (see DETAIL_CONCURRENCY). Reports each
- * completed book via onBookDone so the caller can persist + broadcast
- * incrementally rather than waiting for the whole backlog.
- */
-async function fillBookDetails(books, { concurrency = DETAIL_CONCURRENCY, onBookDone, isCancelled } = {}) {
-  const pending = books.filter((b) => b.detailPending);
-  await mapLimit(pending, concurrency, async (book) => {
-    if (isCancelled?.()) return;
-    const updated = await ensureDetail(book);
-    if (!isCancelled?.()) onBookDone?.(updated);
-  });
 }
 
 function median(values) {
@@ -448,7 +135,7 @@ async function consolidateSelfContainedParts(units) {
  * Books whose file set is byte-for-byte unchanged are reused from `cachedBooks`,
  * so rescanning a large library costs a directory walk rather than a full reparse.
  */
-async function scanLibrary(folders, cachedBooks = [], onProgress) {
+async function scanLibrary(folders, cachedBooks = [], onProgress, { deep = false } = {}) {
   const files = [];
   for (const folder of folders) {
     for await (const file of walk(folder)) files.push(file);
@@ -459,19 +146,66 @@ async function scanLibrary(folders, cachedBooks = [], onProgress) {
   let done = 0;
 
   const built = await mapLimit(units, BOOK_CONCURRENCY, async (unit) => {
+    const startedAt = Date.now();
     const id = hashId(unit.kind === 'single' ? unit.files[0] : `${unit.dir}::${unit.files.length}`);
+    const cached = cacheById.get(id);
+
+    // Cheap first pass: one stat of the book's directory instead of one per
+    // file. A directory's mtime changes whenever a file inside it is added,
+    // removed or renamed, so combined with the file count it detects every
+    // structural change -- and unchanged books (the overwhelming majority of
+    // any rescan) never touch their files at all.
+    //
+    // This is what makes a rescan cheap. Statting every file of every book
+    // meant ~80,000 stat calls concentrated in the multi-file books, which
+    // saturated the library drive, spiked CPU, and left the app unresponsive
+    // long enough for Windows to kill it. Single-file books were never the
+    // problem (one stat each); books split into 200-500 files were.
+    //
+    // Deliberate trade-off: a file edited *in place*, keeping the same name
+    // (a re-tag that rewrites the file), leaves the directory mtime alone and
+    // so is not picked up until something else in the folder changes. That is
+    // rare for an audiobook library, and File > Rescan library still does the
+    // full per-file check (deep = true) for exactly that case.
+    let dirSig = null;
+    if (!deep) {
+      try {
+        const dirStat = await fsp.stat(unit.dir);
+        dirSig = `${dirStat.mtimeMs}:${unit.files.length}`;
+      } catch {
+        dirSig = null; // Unreadable directory: fall through to the full check.
+      }
+    }
+
+    if (dirSig && cached?.dirSig === dirSig && !cached.detailPending) {
+      done += 1;
+      onProgress?.(done, units.length, {
+        dir: unit.dir, files: unit.files.length, kind: unit.kind, cacheHit: true, ms: Date.now() - startedAt,
+      });
+      if (done % 25 === 0) await new Promise((resolve) => { setImmediate(resolve); });
+      return cached;
+    }
+
     const stats = await statFiles(unit.files);
     let book = null;
+    let cacheHit = false;
 
     if (stats.length) {
-      const cached = cacheById.get(id);
       if (cached && cached.signature === unitSignature(stats)) {
-        book = cached;
+        // Unchanged, but either it had no cheap key yet or the directory
+        // moved on without its files changing. Record the current key so the
+        // next scan can take the fast path above; a new object (rather than
+        // mutating) is what marks it dirty for the store's reference diff.
+        book = dirSig && cached.dirSig !== dirSig ? { ...cached, dirSig } : cached;
+        cacheHit = true;
       } else {
         try {
-          book = unit.kind === 'single'
-            ? await buildSingleFileBook(unit, stats, id)
-            : await buildMultiTrackBook(unit, stats, id);
+          const built = unit.kind === 'single'
+            ? await runParse('buildSingleFileBook', { unit, stats, id })
+            : await runParse('buildMultiTrackBook', { unit, stats, id });
+          // dirSig is recorded on freshly built books too, so the very next
+          // scan can skip re-statting their files.
+          book = dirSig ? { ...built, dirSig } : built;
         } catch (err) {
           console.error(`[library] failed to build book at ${unit.dir}: ${err.message}`);
         }
@@ -479,7 +213,31 @@ async function scanLibrary(folders, cachedBooks = [], onProgress) {
     }
 
     done += 1;
-    onProgress?.(done, units.length);
+    // Third argument is per-book detail for diagnostics (see main.js's diag
+    // logging). Optional and ignored by any caller that doesn't want it.
+    onProgress?.(done, units.length, {
+      dir: unit.dir,
+      files: unit.files.length,
+      kind: unit.kind,
+      cacheHit,
+      ms: Date.now() - startedAt,
+    });
+
+    // Hand control back to the macrotask queue regularly.
+    //
+    // Windows logged this app as an Application Hang (event 1002) during a
+    // scan -- not a crash. Awaiting a promise that resolves immediately (a
+    // cache-hit book, or an fs.stat the OS answers from cache) only yields
+    // to the *microtask* queue, which this loop then immediately refills.
+    // Chromium's window message pump runs on the macrotask queue, so at the
+    // ~800 books/second this loop reaches on cached data it can starve the
+    // pump for long enough that Windows declares the window unresponsive
+    // and the app gets torn down. setImmediate is a macrotask, so this
+    // guarantees the UI gets serviced no matter how fast the loop runs.
+    // Every 25 books keeps the cost negligible (~230 yields for a
+    // 5,800-book library) while bounding how long the window can go
+    // unserviced.
+    if (done % 25 === 0) await new Promise((resolve) => { setImmediate(resolve); });
     return book;
   });
 
@@ -492,6 +250,63 @@ async function scanLibrary(folders, cachedBooks = [], onProgress) {
   }
 
   return books;
+}
+
+// bookId -> Promise<book>, shared between the background fill loop and any
+// on-demand request (a book opened before the background loop reaches it) so
+// the same book is never detail-filled twice concurrently.
+const detailInFlight = new Map();
+
+/** Fills in one book's detail if it isn't already, de-duped against concurrent callers. */
+function ensureDetail(book) {
+  if (!book.detailPending) return Promise.resolve(book);
+  let p = detailInFlight.get(book.id);
+  if (!p) {
+    p = runParse('fillOneBookDetail', { book })
+      .catch((err) => {
+        console.warn(`[library] detail fill failed for ${book.sourceDir}: ${err.message}`);
+        // Best-effort, same precedent as tagsFailed above: don't retry forever
+        // on every launch. A real rescan (changed signature) will try again.
+        return { ...book, detailPending: false, detailFailed: true };
+      })
+      .finally(() => detailInFlight.delete(book.id));
+    detailInFlight.set(book.id, p);
+  }
+  return p;
+}
+
+/**
+ * Background pass: fills in every still-pending book's detail, at a
+ * deliberately gentle concurrency (see DETAIL_CONCURRENCY). Reports each
+ * completed book via onBookDone so the caller can persist + broadcast
+ * incrementally rather than waiting for the whole backlog.
+ */
+async function fillBookDetails(books, { concurrency = DETAIL_CONCURRENCY, onBookDone, isCancelled } = {}) {
+  const pending = books.filter((b) => b.detailPending);
+  await mapLimit(pending, concurrency, async (book) => {
+    if (isCancelled?.()) return;
+    const updated = await ensureDetail(book);
+    if (!isCancelled?.()) onBookDone?.(updated);
+  });
+}
+
+/**
+ * Cover thumbnail for main.js's runThumbnailFill() (the backfill pass for
+ * books that got a cover before thumbnails shipped).
+ *
+ * MUST NOT REJECT. Its caller awaits it inside a fire-and-forget promise
+ * chain, so a rejection here becomes an unhandled rejection, which on
+ * Electron's Node terminates the whole main process — that regression
+ * really did kill the app during testing, when this briefly dispatched to a
+ * worker and so gained failure modes the signature never used to have.
+ * Failures collapse to null, and callers treat that as "no thumbnail".
+ */
+function generateCoverThumb(id, sourcePath) {
+  return runParse('generateCoverThumb', { id, sourcePath })
+    .catch((err) => {
+      console.warn(`[library] cover thumbnail failed for ${id}: ${err.message}`);
+      return null;
+    });
 }
 
 module.exports = {
