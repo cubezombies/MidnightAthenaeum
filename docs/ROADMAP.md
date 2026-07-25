@@ -8,6 +8,11 @@ Each item is tagged with rough effort — **S** (hours), **M** (a day or two),
 **L** (several days) — and a note when it also resolves a known limitation from
 the README.
 
+Book counts quoted below vary (~6,300 in older entries, 5,825 today) because
+the library itself changed — duplicate detection alone found 468 removable
+copies. Each figure is what was actually measured at the time, so they are
+left as written rather than retro-fitted to today's number.
+
 ---
 
 ## Where the app stands today
@@ -118,6 +123,28 @@ Already shipped, so it is not repeated in the lists below:
   needs the Whisper transcript aligned to text and is future work (Tier 2
   #6, shipped, EPUB only). Confirmed working hands-on, including the
   paragraph-position estimate. Shipped 2026-07-23.
+
+- **SQLite library store** — `library.json` became `library.db`
+  (`src/main/db.js`), migrated automatically on first launch, old file kept
+  as `.bak`. Per-row writes replace whole-file rewrites (Performance #1,
+  backend swap shipped). Shipped 2026-07-24.
+- **Virtualized grid + cover thumbnails** — the grid renders only what's near
+  view, and loads ~200px cached thumbnails instead of full-size covers.
+  Shipped together deliberately: virtualizing alone made scrolling back into
+  a visited section *slower* (Performance #2/#3, shipped). Shipped 2026-07-24.
+- **Listening statistics & streaks** — a Stats view with total time listened,
+  books finished, current day streak, top authors/narrators, and a 12-week
+  pace chart, backed by a new day-keyed `activity.json` (Tier 2 #3, shipped).
+  Streak/pace accumulate from install forward; there was no history to
+  backfill. Shipped 2026-07-24.
+- **Scan reliability & speed on large libraries** — a scan could spike CPU and
+  hang until Windows killed the app. Fixed by O(1) per-book database updates
+  (was O(total books)), coalescing progress IPC (5,825 renderer wakeups down
+  to 93), a directory-mtime fast path that skips per-file checks for unchanged
+  books (~80,000 file checks down to ~5,800), yielding to the event loop so a
+  fast scan can't starve the UI, and guarding background failures so they
+  can't terminate the app. Also added `diagnostic.log` for crash/hang
+  forensics. Shipped 2026-07-25.
 
 Known gaps carried forward as motivation: series volumes can share a display
 title, box sets stay whole, and merged `.m4b` parts collapse to one chapter each.
@@ -648,6 +675,13 @@ JSON file — see #1 below). The grid is now virtualized and covers are now
 thumbnailed (see #2/#3) — the remaining ceiling is the full-library
 IPC/in-memory load itself, not rendering or cover decode.
 
+**Scanning is I/O-bound, not CPU-bound.** Measured on the real library: a
+rescan parses *nothing* (every book is an unchanged cache hit), and its cost
+was filesystem metadata checks — which is why #6 below failed and why the
+directory-mtime fast path is what actually made rescans cheap. Treat any
+future "make scanning faster" idea as an I/O problem until measurement says
+otherwise.
+
 ### 1. Move the library to SQLite — **backend swap shipped** ✅, **query-per-view still open**
 `library.json` is now `library.db` (`src/main/db.js`), migrated automatically
 on first launch of this version (old file kept as `library.json.bak`, never
@@ -690,10 +724,12 @@ redecode from scratch on return) — cover thumbnails are what actually fixed
 that regression, not just a nice-to-have on their own.
 
 ### 4. Incremental scan via file watcher — **M**
-A full rescan of `E:\Books` takes ~40 minutes. Watch library folders (`chokidar`)
-and update only what changed, so new books appear without a manual full rescan.
-The size+mtime cache already makes rescans cheap; this closes the loop to
-near-real-time.
+A *cold, first-ever* scan of `E:\Books` (parsing every book) takes ~40
+minutes. A routine rescan is now ~3s, since unchanged books are detected from
+their folder's mtime and never re-parsed. So the remaining gap is not speed
+but *latency*: new books only appear when a scan is triggered. Watch library
+folders (`chokidar`) and update only what changed, for near-real-time pickup.
+Would also remove the main reason to run a manual rescan at all.
 
 ### 5. Two-phase / lazy scanning — **shipped** ✅
 Phase 1 (`scanLibrary`) reads tags + duration only — no cover art, and for
@@ -755,6 +791,70 @@ boundaries.
 
 ---
 
+## Reliability & data safety
+
+Found while reviewing this roadmap against the code (2026-07-25). None of
+these are hypothetical — each is a path that exists in `main.js`/`library.js`
+today.
+
+### 1. A scan can wipe the library if the drive is unavailable — **S, do this first** ⚠️
+`runScan()` guards only the "no folders configured" case. If folders *are*
+configured but the scan finds nothing — the library drive offline, unplugged,
+still spinning up, a drive letter that moved — `walk()` catches the read
+error, warns to the console, and returns nothing. `scanLibrary` then returns
+`[]`, and `runScan` unconditionally persists it:
+`libraryStore.set({ ...libraryStore.get(), books })`. That deletes every book
+row in `library.db`.
+
+This library lives on `E:`, a separate SATA drive, and scans run
+automatically at launch — so "drive not ready yet when the app starts" is a
+realistic Tuesday, not a contrived edge case. Progress/bookmarks survive (they
+are keyed by book id in separate stores) but would be orphaned, and recovery
+means a ~40-minute cold rescan.
+
+Fix: refuse to persist a scan result that loses an implausible share of the
+library — e.g. if the previous scan had books and the new one has none (or
+drops by more than some large fraction), keep the old data, surface a clear
+"couldn't read your library folder" message, and leave the books alone. A
+scan that *cannot see the library* is a failed scan, not an empty one.
+
+### 2. Books that fail to parse are invisible — **S**
+`library.js` already records `tagsFailed` and `detailFailed` per book, and
+logs a count to the console (`N book(s) had tag-parse failures`). Nothing
+surfaces either flag: `toClientBook` doesn't send them and the renderer
+never references them (verified — zero occurrences in `app.js`). So a book
+that scanned with unreadable tags shows up as "Unknown author" with no
+indication *why*, and a failed detail-fill is silently permanent until the
+book's signature changes. Surface it: a filter, a card badge, or a line in
+the Folders panel — plus a "retry failed books" action, since the current
+best-effort design deliberately never retries on its own.
+
+### 3. No way to cancel a running scan — **S**
+There is cancellation *machinery* (`isCancelled` tokens for the detail,
+pairing and thumbnail fills) but nothing for phase 1, and no UI for any of
+it. A scan started by accident on a large library holds the Rescan button
+disabled until it finishes. Wire a cancel affordance to the existing token
+pattern.
+
+### 4. The fast path can miss in-place edits — **S**
+The directory-mtime fast path skips per-file checks for unchanged folders,
+which is what made rescans cheap — but a file rewritten in place under the
+same name (a re-tag) leaves the folder mtime untouched and goes unnoticed.
+File > Rescan library forces the full per-file check, so the escape hatch
+exists; it just requires knowing to use it. Consider an occasional automatic
+deep scan (first launch of the week, say) so a library edited outside the app
+converges without the user having to know the distinction.
+
+### 5. Nothing surfaces an unexpected exit — **S**
+`diagnostic.log` now records process-gone reasons, uncaught exceptions and
+scan milestones, which is how the v0.14.0 scan hang was diagnosed. But it is
+only useful to someone who knows to look for the file. On launch, notice that
+the previous session ended without a clean shutdown and offer the log — the
+difference between a bug report saying "it closed itself" and one with
+evidence attached.
+
+---
+
 ## Security & dependency maintenance
 
 Findings from a security pass (2026-07-24): repo-level hardening (GitHub
@@ -811,26 +911,47 @@ rewrite the three call sites — `generateCoverThumb`,
 re-verifying against, not a blind `npm audit fix --force`), so this stays
 flagged rather than closed — containment isn't the same as a fix.
 
+### Replace `jimp` outright — **M**
+Worth considering over the 1.x upgrade. `jimp` is used for exactly two
+things: ~200px cover thumbnails and the build-time icon scripts. It brings a
+large dependency tree for that, it is the source of the `file-type` exposure
+above, and instantiating it inside a second V8 isolate is the leading
+suspect for why worker-thread parsing hung the app. A smaller focused
+encoder (or Electron's own `nativeImage`, which can resize and re-encode
+without any dependency at all) could cover both call sites. `nativeImage` is
+the interesting option: no new dependency, no `file-type` sniffing, and it
+already ships with the app.
+
 ---
 
 ## Suggested sequencing
 
-A pragmatic order that front-loads visible value and unblocks later work:
+Everything in the original sequencing plan has shipped — all of Tier 1, and
+Tier 2 apart from bookmark clips. What follows is what is actually left,
+ordered by value against effort:
 
-1. **Sleep timer, auto-rewind, persisted per-book speed** (Tier 1: 1, 5, 6) —
-   small, high daily value, no architectural change.
-2. **Bookmarks** (Tier 1: 2) — foundation for clips, stats, and Whisper anchors.
-3. **SQLite migration + cover thumbnails** (Opt: 1, 2) — unblocks scale, search,
-   and every table-backed feature that follows.
-4. **`.cue` + sidecar metadata + series grouping** (Tier 3: 1–2, Tier 1: 7) —
-   fixes the biggest known metadata/limitations for a large slice of the library.
-5. **SMTC + statistics** (Tier 2: 2–3) — makes it feel native and sticky.
-6. **Whisper transcription & search, read-along** (Tier 2: 1, 6) — the flagship
-   differentiators, once the data layer can hold their output.
+1. **Reliability #1 — the scan-wipes-library guard** ⚠️. Small, and it closes
+   a real data-loss path on a machine whose library lives on a separate
+   drive. Nothing else on this list matters if a launch can empty the library.
+2. **Reliability #2–#5** (surface parse failures, cancel a scan, occasional
+   deep scan, flag unexpected exits) — all small, all address things that are
+   currently silent. Cheap trust wins.
+3. **Incremental scan via file watcher** (Performance #4) — with rescans now
+   ~3s, the remaining annoyance is having to trigger one at all.
+4. **Sidecar metadata** (Tier 3 #2) — narrator + description from `.nfo`, and
+   `series` from co-located `.abs`/`.opf`, fills the gaps title parsing
+   can't reach. Best remaining metadata win for this library specifically.
+5. **Gapless playback + per-chapter artwork** (Tier 3 #4–#5) — small, purely
+   playback polish, no architectural risk.
+6. **Query-per-view** (Performance #1, the open half) — the real ceiling for
+   very large libraries, and a prerequisite for instant server-side search.
+   Bigger: it changes the app's interaction model, so it wants its own pass.
+7. **Waveform / seek preview, auto-generated chapters, bookmark clips** —
+   genuine features rather than fixes; pick by appetite.
 
-**Out-of-band priority:** items 10–12 (folder management, confirm-before-destroy,
-backup/export — all ⚠️, all shipped) protected against real data loss or were
-dead-code gaps rather than missing polish. All three are now done.
+Deliberately **not** sequenced: the Electron major bump and the `jimp`
+question (see Security). Both are real, both need their own verification
+pass, and neither is a good candidate for bundling into feature work.
 
 ---
 
