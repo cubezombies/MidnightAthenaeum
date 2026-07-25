@@ -7,6 +7,8 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+
+## [0.15.0] - 2026-07-25
 ### Changed
 - Cover thumbnails are now generated with Electron's built-in image support
   instead of a third-party library. They are produced **26x faster** (61ms
