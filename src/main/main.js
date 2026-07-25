@@ -1281,6 +1281,11 @@ function registerIpc() {
     return { book: toClientBook(fresh) };
   });
 
+  ipcMain.on('media:error', (_event, info) => {
+    const i = info || {};
+    diag(`!!! PLAYBACK ERROR code=${i.code} (${i.codeName}) src=${i.src ?? '?'} :: ${i.title ?? ''} ${i.message ? `| ${i.message}` : ''}`);
+  });
+
   ipcMain.handle('progress:save', (_event, { bookId, position, duration, speed, elapsedSeconds }) => {
     if (typeof bookId !== 'string' || typeof position !== 'number') return;
     const progress = { ...progressStore.get() };
@@ -1917,7 +1922,15 @@ app.whenReady().then(async () => {
   // Logged so a memory/disk spike can be correlated against what the
   // renderer actually asked for -- serving a large audio file was invisible
   // in every earlier diagnostic despite being the thing saturating the drive.
-  registerMediaProtocol(getAllowedRoots, ({ filePath, size, start, end, ranged }) => {
+  registerMediaProtocol(getAllowedRoots, ({ filePath, size, start, end, ranged, error, roots, detail, url }) => {
+    // A media request the app refuses or cannot find surfaces in the UI only
+    // as "unsupported or corrupted file" (the renderer sees
+    // MEDIA_ERR_SRC_NOT_SUPPORTED and cannot tell why). Always log these --
+    // they are rare, and without them a playback failure is undiagnosable.
+    if (error) {
+      diag(`!!! MEDIA ${error} :: ${filePath ?? url ?? '?'}${detail ? ` (${detail})` : ''}${roots ? ` | allowed roots: ${roots.join(' | ')}` : ''}`);
+      return;
+    }
     // Counted for *every* request, covers included. An earlier version of
     // this only counted files over 5MB, which made thousands of cover reads
     // invisible -- and the cover cache lives on the data drive, which was

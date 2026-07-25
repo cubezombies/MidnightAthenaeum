@@ -2109,6 +2109,17 @@ el.audio.addEventListener('error', () => {
   const err = el.audio.error;
   if (!err) return;
   console.error(`audio error (code ${err.code}):`, err.message);
+  // Mirror it into diagnostic.log alongside what the media protocol did.
+  // On its own "SRC_NOT_SUPPORTED" says nothing about *why* — pairing it
+  // with the protocol's side (403/404/served) is what makes it diagnosable.
+  const codeNames = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+  window.api.reportMediaError?.({
+    code: err.code,
+    codeName: codeNames[err.code] ?? String(err.code),
+    message: err.message,
+    src: el.audio.currentSrc || el.audio.src || null,
+    title: state.playing?.title ?? null,
+  });
   if (state.playing) {
     const reason = err.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
       ? 'unsupported or corrupted file'

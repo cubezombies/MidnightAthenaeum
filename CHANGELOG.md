@@ -7,6 +7,18 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+### Changed
+- Updated the underlying Electron runtime from 34 to 43, which brings a
+  newer Chromium and closes 18 security advisories against the old version —
+  including two that applied directly to how this app serves your audio files
+  and packages itself. The app now reports no known vulnerable dependencies.
+  Playback, scanning, covers, transcription and the library database were all
+  re-verified against the new runtime.
+- One visible side effect of that update: the "add library folder" and
+  "choose ebook" file pickers now open at your Downloads folder rather than
+  wherever they opened before. Electron changed the default; the backup and
+  data-location dialogs are unaffected because they set their own location.
+
 
 ## [0.15.0] - 2026-07-25
 ### Changed

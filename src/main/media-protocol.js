@@ -92,7 +92,23 @@ function mediaUrl(filePath) {
 function registerScheme() {
   protocol.registerSchemesAsPrivileged([{
     scheme: SCHEME,
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: false },
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: false,
+      // Required because the renderer sets `audio.crossOrigin = 'anonymous'`
+      // (app.js — so Web Audio's analyser isn't tainted and skip-silence /
+      // normalization can read the waveform). That makes every media fetch a
+      // CORS request, and Chromium refuses CORS on a custom scheme that
+      // hasn't opted in. Without this the request is rejected *before* the
+      // protocol handler is ever invoked, and the media element reports
+      // "MEDIA_ELEMENT_ERROR: Format error" — which reads like a broken file
+      // rather than a blocked request. Electron 34 did not enforce this;
+      // Electron 43 does, and it broke playback of every book.
+      corsEnabled: true,
+    },
   }]);
 }
 
@@ -116,12 +132,14 @@ function registerMediaProtocol(getAllowedRoots, onRequest) {
       const encoded = url.pathname.replace(/^\/+/, '');
       filePath = Buffer.from(encoded, 'base64url').toString('utf8');
     } catch {
+      onRequest?.({ error: 'bad-request', url: request.url });
       return new Response('Bad request', { status: 400 });
     }
 
     const roots = [...getAllowedRoots(), COVER_CACHE, ONLINE_COVER_CACHE];
     if (!roots.some((root) => isInside(root, filePath))) {
       console.warn(`[media] blocked out-of-library request: ${filePath}`);
+      onRequest?.({ error: 'forbidden', filePath, roots });
       return new Response('Forbidden', { status: 403 });
     }
 
@@ -129,7 +147,8 @@ function registerMediaProtocol(getAllowedRoots, onRequest) {
     try {
       stat = await fsp.stat(filePath);
       if (!stat.isFile()) throw new Error('not a file');
-    } catch {
+    } catch (err) {
+      onRequest?.({ error: 'not-found', filePath, detail: err.message });
       return new Response('Not found', { status: 404 });
     }
 

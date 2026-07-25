@@ -909,18 +909,41 @@ closed, explicitly-enumerated API rather than a generic IPC passthrough.
 Three cheap renderer-hardening fixes and two deliberately-deferred dependency
 upgrades came out of that pass:
 
-### Deferred: Electron major-version bump
-Electron 34.5.8 (currently pinned) is the last 34.x patch release — no
-further security backports are coming to that line. `npm audit` lists
-several real CVEs against it (an ASAR integrity bypass, use-after-free bugs,
-an IPC response-spoofing issue, among others — see `npm audit` for the full,
-current list and advisory links). Fixing these needs a major-version jump
-(34 → 43 as of this writing), which changes the Node/Electron ABI that
-`@vscode/sqlite3` is compiled against — the native-module build was real,
-non-trivial work to get right (see "Move the library to SQLite" above) and
-would need its full verification gate re-run, not just a version bump and a
-hope. Deliberately deferred to its own dedicated pass rather than bundled
-into a general security cleanup.
+### Resolved: Electron 34 → 43 ✅
+Done. Electron 34.5.8 → **43.2.0**, clearing all **18** CVEs `npm audit`
+listed against the 34.x line (ASAR integrity bypass, several use-after-frees,
+IPC response spoofing, HTTP response-header injection in custom protocol
+handlers, among others). Two of those were directly reachable here: the app
+registers a custom protocol (`ab-media://`) and ships as an asar.
+`npm audit --omit=dev` now reports **0 vulnerabilities**.
+
+**The ABI fear that justified deferring this was wrong.** Both native modules
+(`@vscode/sqlite3` and `@kutalia/whisper-node-addon`) build against
+**Node-API**, not NAN — `node-addon-api`, with `NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS`
+in sqlite3's `binding.gyp` and no `nan` in the tree. Node-API is ABI-stable
+by design, so both loaded unchanged under Electron 43's ABI 148 (up from
+133), verified by requiring each directly. No rebuild, no native-module
+gauntlet. The "would need its full verification gate re-run" framing was
+inherited from the `better-sqlite3` segfault, which was a different problem.
+
+**What actually needed fixing** was mundane and would have broken the release
+build silently:
+- Electron 42 removed the `postinstall` download — the npm package no longer
+  fetches its binary. Added `"postinstall": "install-electron"`, without
+  which `npm install` yields a package with no runnable Electron.
+- Electron 43 requires **Node ≥ 22.12.0**; CI was pinned to Node 20. Bumped
+  the workflow to 22 and declared `engines.node` so a too-old Node fails at
+  install rather than confusingly at build time.
+
+**Behaviour changes worth knowing** (from the 35→43 breaking-change notes,
+checked against the APIs this app actually calls): Electron 43 makes file
+dialogs default to the Downloads folder. Three of this app's five dialogs set
+`defaultPath` explicitly and are unaffected; the library-folder picker and
+the ebook picker don't, so they now open at Downloads. Cosmetic, but both
+would be better with a sensible default — worth a follow-up. Nothing else in
+35→43 touches the APIs in use (`protocol.handle`, `nativeImage`,
+`setJumpList`, `setWindowOpenHandler`, `contextBridge`, `webUtils`,
+`ipcMain.handle`, sandbox/contextIsolation settings all unchanged).
 
 ### Resolved: `jimp` removed from the shipped app ✅
 `npm audit` flags a moderate DoS vulnerability (infinite loop on malformed
