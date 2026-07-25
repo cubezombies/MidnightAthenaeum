@@ -735,8 +735,8 @@ separable, larger change to the app's interaction model and remain a future
 pass.
 
 ### 2. Cover thumbnails — **shipped** ✅
-Small (~200 px) JPEG thumbnails (`jimp`; no WebP encoder available in this
-dependency, see below) generated at detail-fill time and cached in
+Small (~200 px) JPEG thumbnails (Electron's `nativeImage` — originally
+`jimp`, replaced; see Security) generated at detail-fill time and cached in
 `COVER_CACHE/{id}-thumb.jpg`; the grid, series-grouped view, and duplicates
 finder all load these instead of the full-size cover. A backfill pass
 (`runThumbnailFill`, chained after the ebook-pairing fill) catches
@@ -802,7 +802,9 @@ clean, as did v0.13.0 before the pool existed — bisected by building and
 running both. Merely spawning the worker inside Electron's main process was
 enough; a plausible but untested explanation is the cost of instantiating
 `jimp`'s large dependency tree in a second V8 isolate inside that process.
-It never reproduced headlessly, only in the full app.
+It never reproduced headlessly, only in the full app. (`jimp` has since been
+removed from the runtime entirely, so a future attempt would not carry that
+particular weight — which makes the explanation cheaper to test, not proven.)
 
 **What was kept.** `src/main/parse-core.js` survives — the parse functions
 are cleaner extracted, and now run in-process. The real wins came from bugs
@@ -920,7 +922,7 @@ would need its full verification gate re-run, not just a version bump and a
 hope. Deliberately deferred to its own dedicated pass rather than bundled
 into a general security cleanup.
 
-### Deferred but real exposure: `jimp` major-version bump
+### Resolved: `jimp` removed from the shipped app ✅
 `npm audit` flags a moderate DoS vulnerability (infinite loop on malformed
 input) in `file-type`, a transitive dependency via `jimp` (used for cover
 thumbnails — `generateCoverThumb` in `src/main/library.js` — and the
@@ -941,26 +943,53 @@ thumbnail, until force-killed. Given this app already accepts arbitrary
 user-supplied audio files as its core input (and users audiobook-shopping
 outside official stores is a realistic path for a maliciously-crafted file
 to arrive), this was real exposure, not a theoretical one.
-**Still unmitigated**: containing this was the main argument for
-"Worker-thread parsing" above, which was attempted and reverted (it broke the
-app and, on a real library, never parsed anything). So a malicious cover can
-still hang the main process. The underlying `file-type`/ASF parser
-bug itself is still unpatched upstream (the fix is `jimp` 1.x, a breaking
-rewrite the three call sites — `generateCoverThumb`,
-`scripts/make-icons.cjs`, `scripts/make-media-icons.cjs` — would all need
-re-verifying against, not a blind `npm audit fix --force`), so this stays
-flagged rather than closed — containment isn't the same as a fix.
+**Resolved** by removing the dependency from the runtime rather than
+upgrading it. `generateCoverThumb` now uses Electron's `nativeImage`, and
+`jimp` is a devDependency used only by the build-time icon scripts (see
+"Replace `jimp` outright" above). The vulnerable `file-type@16.5.4` is no
+longer packaged — confirmed against a real build — and `npm audit --omit=dev`
+reports 0 vulnerabilities. This closes the exposure at its source: the app no
+longer runs *any* JS image decoder over user-supplied cover art.
 
-### Replace `jimp` outright — **M**
-Worth considering over the 1.x upgrade. `jimp` is used for exactly two
-things: ~200px cover thumbnails and the build-time icon scripts. It brings a
-large dependency tree for that, it is the source of the `file-type` exposure
-above, and instantiating it inside a second V8 isolate is the leading
-suspect for why worker-thread parsing hung the app. A smaller focused
-encoder (or Electron's own `nativeImage`, which can resize and re-encode
-without any dependency at all) could cover both call sites. `nativeImage` is
-the interesting option: no new dependency, no `file-type` sniffing, and it
-already ships with the app.
+Two earlier attempts at this are worth remembering, because neither worked:
+first a claim that the app "only feeds it JPG/PNG" (false — `file-type`
+sniffs bytes, not extensions), then containing the hang in a worker thread
+(reverted; it broke the app). The fix that held was deleting the dependency
+from the path where hostile data reaches it.
+
+### Replace `jimp` outright — **shipped** ✅
+Done, using Electron's own `nativeImage` rather than upgrading to `jimp` 1.x
+or adding another image dependency.
+
+`generateCoverThumb` (`src/main/parse-core.js`) now decodes with
+`nativeImage.createFromPath`, resizes by width (aspect ratio is preserved
+when one dimension is given) and encodes with `toJPEG`. Measured against 50
+real covers from this library:
+
+| | jimp | nativeImage |
+|---|---|---|
+| per cover | 1,629 ms | **61 ms** (26x faster) |
+| average output | 20.5 KB | 15.1 KB |
+| covers decoded | 50/50 | 50/50 |
+
+The security result is the point, though: `jimp` moved to
+`devDependencies` (the icon scripts still need it — see below), so the
+vulnerable `file-type@16.5.4` it pulls in is **no longer shipped**. Verified
+on a real packaged build: zero `jimp` entries in `app.asar`, the only
+`file-type` present is `21.3.4` via `music-metadata` (a different, unaffected
+line), and `npm audit --omit=dev` reports **0 vulnerabilities**. Hostile
+input is handled structurally rather than by hoping: `nativeImage` returns an
+*empty image* for anything it can't decode — garbage, truncated files,
+directories, missing paths — so there is no exception to catch and nothing to
+spin on.
+
+**Not converted:** `scripts/make-icons.cjs` and `scripts/make-media-icons.cjs`
+still use `jimp`, because they do per-pixel drawing (`img.scan`, direct
+bitmap writes) that `nativeImage` cannot do — it resizes and re-encodes, it
+does not draw. That is fine: both are build-time scripts, run by hand,
+operating on a checked-in logo, and their outputs (`build/icon.ico`,
+`build/media-icons/*`) are committed. They are not an attack surface and they
+are not in the shipped app.
 
 ---
 

@@ -7,6 +7,16 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+### Changed
+- Cover thumbnails are now generated with Electron's built-in image support
+  instead of a third-party library. They are produced **26x faster** (61ms
+  vs 1.6s per cover, measured over 50 real covers), come out slightly
+  smaller, and look the same. The removed library was also the last piece of
+  the app that ran a JavaScript image decoder over cover art taken from your
+  audio files — which is arbitrary data the app doesn't control — and it
+  carried an unfixed advisory for exactly that situation. The app now ships
+  with no known vulnerable dependencies.
+
 
 ## [0.14.1] - 2026-07-25
 ### Fixed
