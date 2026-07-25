@@ -1045,6 +1045,34 @@ function runThumbnailFill() {
  * fast path; an explicit "Rescan library" is the escape hatch for the one
  * case the fast path can miss, a file rewritten in place under the same name.
  */
+/** True when `child` is inside `parent` (or is it). Used to tell which books belong to an unreadable folder. */
+function isInsideFolder(parent, child) {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Which of the library folders can't be read right now.
+ *
+ * A scan that cannot see a folder finds no files in it, which is
+ * indistinguishable from "the user deleted everything" unless we check
+ * separately — and acting on that guess deletes real data (see runScan).
+ * This library lives on its own drive and scans run at launch, so a folder
+ * being briefly unavailable (drive asleep, unplugged, letter moved, network
+ * path down) is ordinary, not exotic.
+ */
+async function unreadableFolders(folders) {
+  const results = await Promise.all(folders.map(async (folder) => {
+    try {
+      await fsp.readdir(folder);
+      return null;
+    } catch {
+      return folder;
+    }
+  }));
+  return results.filter(Boolean);
+}
+
 async function runScan({ deep = false } = {}) {
   if (scanning) return;
   await stopDetailFill(); // phase 2 must fully quiesce before we read the cache snapshot below
@@ -1057,6 +1085,33 @@ async function runScan({ deep = false } = {}) {
     return;
   }
 
+  // Never let an unreadable folder look like an emptied one. Folders that
+  // can't be read are dropped from this scan, and the books already known
+  // under them are carried through untouched rather than being scanned for
+  // (and therefore not found, and therefore deleted).
+  const badFolders = await unreadableFolders(state.folders);
+  if (badFolders.length) {
+    diag(`scan: ${badFolders.length} unreadable folder(s): ${badFolders.join(' | ')}`);
+  }
+  if (badFolders.length === state.folders.length) {
+    // Nothing readable at all: this is a failed scan, not an empty library.
+    diag('scan: aborted, no library folder is readable — keeping existing books');
+    console.error('[scan] no library folder is readable; keeping the existing library');
+    dialog.showErrorBox(
+      'Could not read your library',
+      `${badFolders.length === 1 ? 'This folder' : 'None of these folders'} could be read:\n\n${badFolders.join('\n')}\n\n`
+      + 'If the drive is disconnected or still starting up, reconnect it and rescan. '
+      + 'Your library has been left as it is.',
+    );
+    mainWindow?.webContents.send('library:changed', currentState());
+    return;
+  }
+
+  const scanFolders = state.folders.filter((f) => !badFolders.includes(f));
+  const preservedBooks = badFolders.length
+    ? state.books.filter((b) => badFolders.some((f) => isInsideFolder(f, b.sourceDir)))
+    : [];
+
   scanning = true;
   sendProgress('library:scan-progress', { done: 0, total: 0, scanning: true }, { force: true });
 
@@ -1066,7 +1121,7 @@ async function runScan({ deep = false } = {}) {
 
   try {
     let lastRssMB = 0;
-    const books = await scanLibrary(state.folders, state.books, (done, total, info) => {
+    const books = await scanLibrary(scanFolders, state.books, (done, total, info) => {
       // Throttled: the cache-hit path reaches ~800 books/second on a large
       // library, and an unthrottled send here was the single biggest source
       // of renderer load during a launch scan.
@@ -1090,8 +1145,31 @@ async function runScan({ deep = false } = {}) {
         diagMetrics(`scan ${done}/${total}`);
       }
     }, { deep });
-    diag(`scan: built ${books.length} books, persisting`);
-    libraryStore.set({ ...libraryStore.get(), books });
+
+    // Last line of defence. Every folder read fine, yet nothing came back
+    // while the library previously had books -- that is not a library
+    // someone emptied one file at a time, it is a read that failed in a way
+    // the per-folder check above didn't catch (permissions, a mount that
+    // answers readdir with an empty listing, a folder replaced by a stub).
+    // Refuse rather than persist the deletion of every row.
+    if (!books.length && state.books.length) {
+      diag(`scan: refused to persist an empty result over ${state.books.length} existing books`);
+      console.error('[scan] scan returned no books but the library is not empty; keeping existing library');
+      dialog.showErrorBox(
+        'Library scan found nothing',
+        `The scan finished without finding any books, but your library has ${state.books.length}.\n\n`
+        + 'This usually means the library folder could not really be read. '
+        + 'Your library has been left as it is — no books were removed.',
+      );
+      return;
+    }
+
+    const merged = preservedBooks.length ? [...books, ...preservedBooks] : books;
+    if (preservedBooks.length) {
+      diag(`scan: kept ${preservedBooks.length} book(s) belonging to unreadable folder(s)`);
+    }
+    diag(`scan: built ${books.length} books (+${preservedBooks.length} preserved), persisting`);
+    libraryStore.set({ ...libraryStore.get(), books: merged });
     diag('scan: persisted');
   } catch (err) {
     console.error('[scan] failed:', err);

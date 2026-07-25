@@ -7,6 +7,15 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+### Fixed
+- **A scan could delete your whole library if the drive wasn't available.**
+  If a library folder couldn't be read — drive disconnected, still spinning
+  up, drive letter changed — the scan found nothing there, and that empty
+  result was saved over your library. Folders that can't be read are now
+  skipped and the books already known under them are kept; if nothing is
+  readable at all, the scan stops and tells you rather than emptying
+  anything. A scan that finds no books at all when your library isn't empty
+  is likewise refused.
 
 ## [0.14.0] - 2026-07-25
 ### Fixed

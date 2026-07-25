@@ -659,7 +659,41 @@ a `seekTo`/`ended` refinement in `app.js`.
 Some `.m4b` chapters carry their own images (`IChapter.image`). Surface them in
 the chapter list / now-playing view for books that have them.
 
-### 6. Audible `.aax` / `.aaxc` support — **L**
+### 6. Full-cast / graphic audio productions — **M**
+GraphicAudio and similar "movie in your mind" productions are structurally
+different from a narrated audiobook, and the library already has them:
+`E:\Books\GraphicAudio` holds 28 titles, 16 of them split across parts named
+`(1 of 2)` / `(2 of 2)`, and 4 tagged `[Dramatized Adaptation]`. Across the
+whole library, 53 folders use an `x of y` part convention.
+
+What breaks today:
+
+- **Parts scan as separate books.** `(1 of 2)` and `(2 of 2)` are distinct
+  folders with distinct tags, so a single production shows up as two
+  unrelated entries with duplicated titles. `consolidateSelfContainedParts`
+  merges numbered parts *within one folder*; this is the across-folders case,
+  and the existing series parser reads `x of y` as a series index rather than
+  as parts of one work.
+- **"Narrator" is wrong for a full cast.** These have a cast, not a narrator,
+  and the `composer` tag they land in is usually a studio credit. Showing it
+  as "Narrated by" is misleading.
+- **They are not duplicates.** Duplicate detection groups by title+author and
+  splits by duration/track count — a dramatized adaptation and the straight
+  narration of the same book are legitimately different recordings, and both
+  are worth keeping. Worth an explicit check that this holds, since the
+  titles often match exactly.
+
+Scope: detect the `x of y` convention and merge parts into one book with a
+continuous timeline (the multi-track machinery already does this — it just
+needs to span folders); recognise `[Dramatized Adaptation]` / `GraphicAudio`
+and label the production type on the card and in the book view; prefer "Cast"
+over "Narrator" for those. A **Full cast** filter would be a natural follow-on
+once the type is known, and pairs with the existing Has-ebook filter.
+
+Worth doing before sidecar metadata (#2): both touch how a book's identity is
+derived, and getting parts merged first means less to redo.
+
+### 7. Audible `.aax` / `.aaxc` support — **L**
 Decrypt owned Audible files with the user's activation bytes (the Libation
 approach) so an Audible library plays natively. Legally sensitive and heavier;
 list it, gate it behind explicit user-supplied credentials, and treat as a later,
@@ -797,7 +831,7 @@ Found while reviewing this roadmap against the code (2026-07-25). None of
 these are hypothetical — each is a path that exists in `main.js`/`library.js`
 today.
 
-### 1. A scan can wipe the library if the drive is unavailable — **S, do this first** ⚠️
+### 1. A scan can wipe the library if the drive is unavailable — **fixed** ✅
 `runScan()` guards only the "no folders configured" case. If folders *are*
 configured but the scan finds nothing — the library drive offline, unplugged,
 still spinning up, a drive letter that moved — `walk()` catches the read
@@ -812,11 +846,17 @@ realistic Tuesday, not a contrived edge case. Progress/bookmarks survive (they
 are keyed by book id in separate stores) but would be orphaned, and recovery
 means a ~40-minute cold rescan.
 
-Fix: refuse to persist a scan result that loses an implausible share of the
-library — e.g. if the previous scan had books and the new one has none (or
-drops by more than some large fraction), keep the old data, surface a clear
-"couldn't read your library folder" message, and leave the books alone. A
-scan that *cannot see the library* is a failed scan, not an empty one.
+**Fixed** (unreleased): each configured folder is checked for readability
+before the result is trusted. Unreadable folders are dropped from the scan
+and the books already known under them are carried through untouched, so a
+multi-folder library only rescans what it can actually see. If *no* folder is
+readable the scan aborts and says so, leaving the library alone. A final
+guard refuses to persist an empty result when the library previously had
+books, covering read failures the per-folder check can't see (permissions, a
+mount that answers with an empty listing). Verified against the real
+`scanLibrary`, including that an *empty but readable* folder is correctly
+distinguished from an unreadable one — the former is a genuine "you deleted
+everything", the latter never is.
 
 ### 2. Books that fail to parse are invisible — **S**
 `library.js` already records `tagsFailed` and `detailFailed` per book, and
@@ -930,17 +970,18 @@ Everything in the original sequencing plan has shipped — all of Tier 1, and
 Tier 2 apart from bookmark clips. What follows is what is actually left,
 ordered by value against effort:
 
-1. **Reliability #1 — the scan-wipes-library guard** ⚠️. Small, and it closes
-   a real data-loss path on a machine whose library lives on a separate
-   drive. Nothing else on this list matters if a launch can empty the library.
-2. **Reliability #2–#5** (surface parse failures, cancel a scan, occasional
+1. **Reliability #2–#5** (surface parse failures, cancel a scan, occasional
    deep scan, flag unexpected exits) — all small, all address things that are
    currently silent. Cheap trust wins.
-3. **Incremental scan via file watcher** (Performance #4) — with rescans now
+2. **Incremental scan via file watcher** (Performance #4) — with rescans now
    ~3s, the remaining annoyance is having to trigger one at all.
-4. **Sidecar metadata** (Tier 3 #2) — narrator + description from `.nfo`, and
+3. **Sidecar metadata** (Tier 3 #2) — narrator + description from `.nfo`, and
    `series` from co-located `.abs`/`.opf`, fills the gaps title parsing
    can't reach. Best remaining metadata win for this library specifically.
+4. **Full-cast / graphic audio productions** (Tier 3 #6) — 28 titles in this
+   library scan as split, mislabelled entries today. Touches how a book's
+   identity is derived, so worth doing before sidecar metadata rather than
+   after.
 5. **Gapless playback + per-chapter artwork** (Tier 3 #4–#5) — small, purely
    playback polish, no architectural risk.
 6. **Query-per-view** (Performance #1, the open half) — the real ceiling for
