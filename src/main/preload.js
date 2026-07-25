@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('api', {
   ensureBookDetail: (bookId) => ipcRenderer.invoke('library:ensureBookDetail', bookId),
   saveProgress: (payload) => ipcRenderer.invoke('progress:save', payload),
   clearProgress: (bookId) => ipcRenderer.invoke('progress:clear', bookId),
+  getStats: () => ipcRenderer.invoke('stats:get'),
   setFinished: (payload) => ipcRenderer.invoke('progress:setFinished', payload),
   addBookmark: (payload) => ipcRenderer.invoke('bookmarks:add', payload),
   updateBookmark: (payload) => ipcRenderer.invoke('bookmarks:update', payload),

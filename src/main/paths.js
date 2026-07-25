@@ -68,6 +68,10 @@ module.exports = {
   // pairings. Same shape/precedent as METADATA_FILE: a user-correctable
   // annotation kept separate from the scanned book record, not scan output.
   EBOOK_PAIRING_FILE: path.join(DATA_ROOT, 'ebook-pairings.json'),
+  // { [dateString: 'YYYY-MM-DD']: secondsListened } -- local-calendar-date
+  // keyed, deliberately not book-keyed (see src/main/main.js's stats:get and
+  // progress:save handlers). Powers total time listened / streak / pace.
+  ACTIVITY_FILE: path.join(DATA_ROOT, 'activity.json'),
   // Per-book timestamped transcripts (opt-in, local Whisper transcription).
   TRANSCRIPTS_DIR: path.join(DATA_ROOT, 'transcripts'),
   // The downloaded ggml model file(s) — large (100MB+), kept out of backups

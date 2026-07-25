@@ -8,6 +8,20 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-24
+### Added
+- **Listening stats** — a new Stats view (bar-chart icon in the top bar)
+  showing total time listened, books finished, your current day streak,
+  top 5 authors and narrators, and a 12-week listening pace chart. Streak
+  and pace start tracking from this version forward — there's no historical
+  data to back-fill from before now.
+
+### Fixed
+- Ebook read-along pairings (`ebook-pairings.json`) were never actually
+  loaded from disk at startup — every launch silently re-scanned the whole
+  library for matches and could overwrite a manually-picked pairing with a
+  fresh auto-guess. Pairings now load correctly on launch.
+
 ## [0.12.0] - 2026-07-24
 ### Changed
 - The library grid now renders only the books actually in or near view,

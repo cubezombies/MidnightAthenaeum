@@ -888,4 +888,43 @@ body.playing .read-along-panel { bottom: var(--player-h); }
   background: var(--accent-soft); border-radius: 4px;
   margin-left: -8px; margin-right: -8px; padding: 2px 8px;
 }
+
+/* ---------- Stats view ---------- */
+.stats-cards { display: flex; gap: 16px; margin-bottom: 32px; flex-wrap: wrap; }
+.stat-card {
+  flex: 1; min-width: 160px;
+  background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: 12px;
+  padding: 18px 20px;
+}
+.stat-value { font-size: 28px; font-weight: 700; line-height: 1.2; }
+.stat-label { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+.stats-section { margin-bottom: 32px; }
+.stats-top-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+
+.stats-top-list { list-style: none; margin: 0; padding: 0; }
+.stats-top-item {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 9px 0; border-bottom: 1px solid var(--line);
+}
+.stats-top-item:last-child { border-bottom: none; }
+
+/* CSS-only bar chart -- no chart library anywhere in this renderer. The row
+   needs an explicit height since the bars are sized with percentage
+   heights, which resolve against it, not against their own content. */
+.stats-chart {
+  display: flex; align-items: flex-end; gap: 4px;
+  height: 140px; padding-top: 8px;
+  border-bottom: 1px solid var(--line); /* baseline hairline -- a zero-listening week should read as "zero", not "missing" */
+}
+.stats-bar {
+  flex: 1; max-width: 28px;
+  background: var(--accent); border-radius: 3px 3px 0 0;
+  min-height: 2px; /* always visibly present, even at 0 seconds */
+  cursor: default;
+}
+.stats-bar:hover, .stats-bar:focus-visible {
+  background: var(--accent-hover);
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
 .updates-notes-body a { color: var(--accent); }

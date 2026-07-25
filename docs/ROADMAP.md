@@ -416,10 +416,26 @@ privacy setting. Also verified end-to-end: launching a second process with
 single-instance lock and correctly focuses the running window on that exact
 book instead of opening a duplicate one.
 
-### 3. Listening statistics & streaks — **M**
-Total time listened, books finished, current streak, top authors/narrators, pace
-over time. `progress.json` timestamps already capture most of the raw signal.
-A stats page is a strong retention feature and easy to make visually appealing.
+### 3. Listening statistics & streaks — **shipped** ✅
+New Stats view (topbar bar-chart icon): total time listened, books finished,
+current streak, top-5 authors/narrators, and a 12-week pace chart. The
+premise that `progress.json`'s timestamps "already capture most of the raw
+signal" didn't hold up on inspection — it's a per-book snapshot overwritten
+on every save, no history — so this shipped with a new minimal `activity.json`
+store (`{ [date]: secondsListened }`, nothing richer) and real wall-clock
+listening-time tracking piggybacked onto the existing 5-second progress-save
+cadence rather than a new timer. "Books finished" and "top authors/narrators"
+needed no new tracking — both computable from data already sent to the
+renderer. Streak/pace can only accumulate from this version forward; there's
+no way to backfill history that was never recorded.
+
+Two real bugs caught before shipping: an early design would have counted
+phantom listening time if a pause/seek/speed-change fired while already
+paused (fixed with a play-state gate checked before any state mutation), and
+a genuinely pre-existing bug found along the way — `pairingStore` (ebook
+read-along pairings) was never actually loaded from disk at startup, so
+every launch silently re-scanned the whole library and could overwrite
+manually-set pairings.
 
 ### 4. Bookmark clips: export & share cards — **M**
 Turn a bookmark span into a short audio clip (via ffmpeg) or a shareable image

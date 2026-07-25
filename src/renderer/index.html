@@ -97,6 +97,9 @@
     <symbol id="icon-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
     </symbol>
+    <symbol id="icon-bar-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="6" y1="20" x2="6" y2="16"/><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/>
+    </symbol>
   </svg>
 
   <header class="topbar">
@@ -115,6 +118,9 @@
       </button>
       <button id="discordBtn" class="icon-btn" title="Show what you're listening to on Discord" aria-label="Discord Rich Presence" aria-pressed="false">
         <svg class="icon" aria-hidden="true"><use href="#icon-broadcast"></use></svg>
+      </button>
+      <button id="statsBtn" class="icon-btn" title="Listening stats" aria-label="Listening stats">
+        <svg class="icon" aria-hidden="true"><use href="#icon-bar-chart"></use></svg>
       </button>
       <button id="rescanBtn" class="btn">Rescan</button>
       <div class="extra folders">
@@ -230,6 +236,46 @@
         <p id="seriesSub" class="muted"></p>
       </div>
       <div id="seriesGrid" class="grid"></div>
+    </section>
+
+    <!-- Listening stats -->
+    <section id="statsView" class="hidden">
+      <div id="statsEmpty" class="empty hidden">
+        <h2>No listening data yet</h2>
+        <p>Play a book for a bit and your stats will start showing up here.</p>
+      </div>
+      <div id="statsContent">
+        <div class="stats-cards">
+          <div class="stat-card">
+            <div id="statsTotalTime" class="stat-value">0 min</div>
+            <div class="stat-label">Total time listened</div>
+          </div>
+          <div class="stat-card">
+            <div id="statsBooksFinished" class="stat-value">0</div>
+            <div class="stat-label">Books finished</div>
+          </div>
+          <div class="stat-card">
+            <div id="statsStreak" class="stat-value">0</div>
+            <div class="stat-label">Day streak</div>
+          </div>
+        </div>
+
+        <section class="stats-section">
+          <h3 class="section-label">Listening pace</h3>
+          <div id="statsChart" class="stats-chart"></div>
+        </section>
+
+        <div class="stats-top-grid">
+          <section class="stats-section">
+            <h3 class="section-label">Top authors</h3>
+            <ol id="statsTopAuthors" class="stats-top-list"></ol>
+          </section>
+          <section class="stats-section">
+            <h3 class="section-label">Top narrators</h3>
+            <ol id="statsTopNarrators" class="stats-top-list"></ol>
+          </section>
+        </div>
+      </div>
     </section>
   </main>
 

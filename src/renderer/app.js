@@ -11,6 +11,9 @@ const el = {
   groupToggle: $('groupToggle'), sortSelect: $('sortSelect'),
   seriesView: $('seriesView'), seriesTitle: $('seriesTitle'), seriesSub: $('seriesSub'), seriesGrid: $('seriesGrid'),
   libraryView: $('libraryView'), bookView: $('bookView'),
+  statsBtn: $('statsBtn'), statsView: $('statsView'), statsEmpty: $('statsEmpty'), statsContent: $('statsContent'),
+  statsTotalTime: $('statsTotalTime'), statsBooksFinished: $('statsBooksFinished'), statsStreak: $('statsStreak'),
+  statsChart: $('statsChart'), statsTopAuthors: $('statsTopAuthors'), statsTopNarrators: $('statsTopNarrators'),
   viewTitle: $('viewTitle'), backBtn: $('backBtn'), scanStatus: $('scanStatus'), themeBtn: $('themeBtn'), themeIcon: $('themeIcon'),
   scanProgressBar: $('scanProgressBar'), scanProgressFill: $('scanProgressFill'),
   addFolderBtn: $('addFolderBtn'), emptyAddBtn: $('emptyAddBtn'), rescanBtn: $('rescanBtn'),
@@ -870,13 +873,26 @@ gridResizeObserver.observe(el.main);
 
 /* ---------------- series view ---------------- */
 
+/**
+ * Toggles which top-level view section is visible, plus the shared
+ * backBtn/viewTitle chrome around it. Extracted once a 4th near-identical
+ * case (Stats) made the duplication -- previously inlined separately in
+ * showLibrary()/openBook()/openSeries() -- worth collapsing into one place.
+ * `title` is optional since openBook() sets viewTitle itself, from
+ * renderBookHeader(), after this runs.
+ */
+function showView(name, { title, showBack = true } = {}) {
+  el.libraryView.classList.toggle('hidden', name !== 'library');
+  el.bookView.classList.toggle('hidden', name !== 'book');
+  el.seriesView.classList.toggle('hidden', name !== 'series');
+  el.statsView.classList.toggle('hidden', name !== 'stats');
+  el.backBtn.classList.toggle('hidden', !showBack);
+  if (title !== undefined) el.viewTitle.textContent = title;
+}
+
 function openSeries(group) {
   state.viewingSeries = group;
-  el.libraryView.classList.add('hidden');
-  el.bookView.classList.add('hidden');
-  el.seriesView.classList.remove('hidden');
-  el.backBtn.classList.remove('hidden');
-  el.viewTitle.textContent = group.name;
+  showView('series', { title: group.name });
   el.main.scrollTop = 0;
 
   const hours = group.volumes.reduce((sum, v) => sum + (v.book.duration || 0), 0) / 3600;
@@ -899,11 +915,7 @@ function showLibrary() {
   state.current = null;
   state.viewingSeries = null;
   state.bookReturnsToSeries = null;
-  el.libraryView.classList.remove('hidden');
-  el.bookView.classList.add('hidden');
-  el.seriesView.classList.add('hidden');
-  el.backBtn.classList.add('hidden');
-  el.viewTitle.textContent = 'Library';
+  showView('library', { title: 'Library', showBack: false });
   renderLibrary();
 }
 
@@ -915,6 +927,113 @@ function goBack() {
     showLibrary();
   }
 }
+
+/* ---------------- stats view ---------------- */
+
+/** Same local-calendar-date key format main.js's activityStore uses (src/main/main.js's localDateKey) — must match exactly, this is reading the same keys, not writing them. */
+function localDateKeyClient(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function formatStatsDuration(totalSeconds) {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.round((totalSeconds % 3600) / 60);
+  if (hours === 0) return `${minutes} min`;
+  return minutes === 0 ? `${hours} hr` : `${hours} hr ${minutes} min`;
+}
+
+/**
+ * Ranks authors/narrators by number of books actually engaged with (have
+ * any saved progress at all) — a count, not time-weighted, since that's
+ * fully answerable from data already sent to the renderer with no new
+ * tracking; time-weighted ranking would need per-book time attribution,
+ * which activityStore deliberately doesn't carry (see the plan's schema
+ * rationale).
+ */
+function topBy(field, limit = 5) {
+  const counts = new Map();
+  for (const book of state.books) {
+    const value = book[field];
+    if (!value || !state.progress[book.id]) continue;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+}
+
+function buildStatsTopItem(name, count) {
+  const li = document.createElement('li');
+  li.className = 'stats-top-item';
+  const nameEl = document.createElement('span');
+  nameEl.textContent = name;
+  const countEl = document.createElement('span');
+  countEl.className = 'muted small';
+  countEl.textContent = `${count} book${count === 1 ? '' : 's'}`;
+  li.append(nameEl, countEl);
+  return li;
+}
+
+/** Aggregates the day-map into the last `weeks` weeks' totals, oldest first, for the pace chart. */
+function aggregateWeeks(activity, weeks = 12) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const buckets = [];
+  for (let w = weeks - 1; w >= 0; w -= 1) {
+    const weekStart = new Date(today);
+    weekStart.setDate(weekStart.getDate() - (w * 7) - 6);
+    const weekEnd = new Date(today);
+    weekEnd.setDate(weekEnd.getDate() - (w * 7));
+    let seconds = 0;
+    for (const d = new Date(weekStart); d <= weekEnd; d.setDate(d.getDate() + 1)) {
+      seconds += activity[localDateKeyClient(d)] ?? 0;
+    }
+    buckets.push({ start: weekStart, end: weekEnd, seconds });
+  }
+  return buckets;
+}
+
+const statsDateFmt = { month: 'short', day: 'numeric' };
+
+/**
+ * CSS-only bars (no canvas/chart library — none exists anywhere in this
+ * renderer). Every bar carries a title/aria-label with its actual value, not
+ * just relative height, and is tabIndex=0 so the same info reachable on
+ * hover is reachable on keyboard focus too.
+ */
+function renderStatsChart(buckets) {
+  el.statsChart.replaceChildren();
+  const max = Math.max(1, ...buckets.map((b) => b.seconds));
+  for (const bucket of buckets) {
+    const bar = document.createElement('div');
+    bar.className = 'stats-bar';
+    bar.style.height = `${Math.max(2, Math.round((bucket.seconds / max) * 100))}%`;
+    bar.tabIndex = 0;
+    const label = `${bucket.start.toLocaleDateString(undefined, statsDateFmt)}–${bucket.end.toLocaleDateString(undefined, statsDateFmt)}: ${formatStatsDuration(bucket.seconds)}`;
+    bar.title = label;
+    bar.setAttribute('aria-label', label);
+    el.statsChart.append(bar);
+  }
+}
+
+async function showStats() {
+  showView('stats', { title: 'Stats' });
+
+  const { activity, streak } = await window.api.getStats();
+  const totalSeconds = Object.values(activity).reduce((sum, s) => sum + s, 0);
+  const hasData = totalSeconds > 0;
+  el.statsEmpty.classList.toggle('hidden', hasData);
+  el.statsContent.classList.toggle('hidden', !hasData);
+  if (!hasData) return;
+
+  el.statsTotalTime.textContent = formatStatsDuration(totalSeconds);
+  el.statsBooksFinished.textContent = String(Object.values(state.progress).filter((p) => isFinished(p)).length);
+  el.statsStreak.textContent = String(streak);
+
+  renderStatsChart(aggregateWeeks(activity));
+  el.statsTopAuthors.replaceChildren(...topBy('author').map(([name, count]) => buildStatsTopItem(name, count)));
+  el.statsTopNarrators.replaceChildren(...topBy('narrator').map(([name, count]) => buildStatsTopItem(name, count)));
+}
+
+el.statsBtn.addEventListener('click', showStats);
 
 /** The header block (cover/title/author/sub/description) — split out of openBook() so applyState() can refresh it in place after a metadata edit, without touching playback or the chapter search. */
 function renderBookHeader(book) {
@@ -941,10 +1060,7 @@ function openBook(bookId) {
   state.current = book;
   state.bookReturnsToSeries = null; // series volumes re-set this after this runs
   el.chapterSearch.value = ''; // start each book's chapter list unfiltered
-  el.libraryView.classList.add('hidden');
-  el.seriesView.classList.add('hidden');
-  el.bookView.classList.remove('hidden');
-  el.backBtn.classList.remove('hidden');
+  showView('book');
 
   renderBookHeader(book);
   renderChapters(book);
@@ -1712,9 +1828,25 @@ function jumpChapter(delta) {
   seekTo(book.chapters[target].start);
 }
 
+// Wall-clock timestamp of the last flushProgress() call, regardless of
+// whether it added listening time -- lets each call compute the real time
+// elapsed since the previous one. Deliberately wall-clock, not a delta of
+// `position`: position-delta would over-count at faster-than-1x speed (2s
+// of position per 1 real second at 2x) and go negative on rewind, both
+// wrong for "time actually spent listening" as a habit/streak stat.
+let lastActivityCheckpoint = Date.now();
+
 function flushProgress() {
   const book = state.playing;
   if (!book) return;
+  // Must be read before anything below touches el.audio/state -- this is
+  // what stops the *other* four flushProgress() call sites (pause, seek,
+  // speed-change, book-switch) from recording phantom listening time when
+  // they fire while audio is already paused (e.g. switching books while the
+  // old one sits paused). Only the periodic 5s tick is naturally gated on
+  // playing state; the others aren't, so this function has to gate itself.
+  const wasPlaying = !el.audio.paused;
+
   const position = globalTime();
   if (!Number.isFinite(position)) return;
 
@@ -1728,7 +1860,20 @@ function flushProgress() {
     speed,
     updatedAt: Date.now(),
   };
-  window.api.saveProgress({ bookId: book.id, position, duration, speed });
+
+  const payload = { bookId: book.id, position, duration, speed };
+  if (wasPlaying) {
+    // Capped ~10s: tolerates the 5s interval's normal jitter while
+    // rejecting a sleep/resume gap or debugger pause being counted as hours
+    // of listening. Accepted trade-off, not a bug: the `pause` handler's own
+    // flushProgress() call runs *after* audio has already paused, so up to
+    // ~5s between the last periodic tick and the pause action goes
+    // uncounted here -- a bounded undercount is a much safer failure mode
+    // than the overcount this whole gate exists to avoid.
+    payload.elapsedSeconds = Math.max(0, Math.min((Date.now() - lastActivityCheckpoint) / 1000, 10));
+  }
+  window.api.saveProgress(payload);
+  lastActivityCheckpoint = Date.now();
 }
 
 /* ---------------- sleep timer ---------------- */

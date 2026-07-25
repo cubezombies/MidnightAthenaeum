@@ -9,7 +9,7 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 const {
   USER_DATA, LIBRARY_FILE, LIBRARY_DB_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
   METADATA_FILE, DATA_ROOT, OS_DEFAULT_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, BACKUP_DIR,
-  REORG_ID_MAP_FILE, EBOOK_PAIRING_FILE, setDataLocation, clearDataLocation,
+  REORG_ID_MAP_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, setDataLocation, clearDataLocation,
 } = require('./paths');
 const { isFinishedByPosition } = require('./finished');
 
@@ -71,6 +71,11 @@ const metadataStore = new JsonStore(METADATA_FILE, {});
 // pairings. 'manual' entries (and explicit "no ebook" picks) are never
 // overwritten by a later automatic guess.
 const pairingStore = new JsonStore(EBOOK_PAIRING_FILE, {});
+// { [dateString: 'YYYY-MM-DD']: secondsListened } -- local-date keyed, not
+// book-keyed, so it's deliberately excluded from remapIdKeyedStores() below
+// and the backup-restore/reorganize flushSync clusters (nothing there could
+// ever need to remap a date key).
+const activityStore = new JsonStore(ACTIVITY_FILE, {});
 
 let mainWindow = null;
 let scanning = false;
@@ -166,6 +171,18 @@ function bookMtime(book) {
     if (mtime > max) max = mtime;
   }
   return max;
+}
+
+/**
+ * Local-calendar-date key for activityStore, e.g. "2026-07-24". Deliberately
+ * not `toISOString()` (UTC -- misbuckets listening near local midnight in
+ * non-UTC timezones) and not `toLocaleDateString()` (locale-dependent
+ * format, not lexically sortable -- breaks both the streak backward-walk
+ * and week aggregation, which both need YYYY-MM-DD strings that sort
+ * correctly as plain strings).
+ */
+function localDateKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
 /** Books carry absolute paths; the renderer only ever sees ab-media:// URLs. */
@@ -487,8 +504,13 @@ async function restoreBackup() {
 
 /** Files/folders this app actually owns under DATA_ROOT — deliberately not `userData` (Chromium's own profile/cache), which stays behind and is safe to lose: it only holds renderer localStorage (theme, sort, etc.), not library data, and moving it while its own process still has it open is asking for trouble. */
 function ownDataEntries() {
-  return [LIBRARY_DB_FILE, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE, METADATA_FILE, COVER_CACHE, ONLINE_COVER_CACHE]
-    .filter((p) => fs.existsSync(p));
+  // EBOOK_PAIRING_FILE was missing here before -- a second real pre-existing
+  // gap found while adding ACTIVITY_FILE: a data-location move would have
+  // silently stranded ebook-pairings.json at the old location.
+  return [
+    LIBRARY_DB_FILE, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
+    METADATA_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, COVER_CACHE, ONLINE_COVER_CACHE,
+  ].filter((p) => fs.existsSync(p));
 }
 
 /** Move one entry, falling back to copy+delete across drives where rename() can't work atomically. */
@@ -1009,7 +1031,7 @@ function registerIpc() {
     return { book: toClientBook(fresh) };
   });
 
-  ipcMain.handle('progress:save', (_event, { bookId, position, duration, speed }) => {
+  ipcMain.handle('progress:save', (_event, { bookId, position, duration, speed, elapsedSeconds }) => {
     if (typeof bookId !== 'string' || typeof position !== 'number') return;
     const progress = { ...progressStore.get() };
     progress[bookId] = {
@@ -1025,6 +1047,19 @@ function registerIpc() {
     };
     progressStore.set(progress);
     refreshJumpList();
+
+    // Real wall-clock listening time, sent only when the renderer confirmed
+    // audio was actually playing (see flushProgress's wasPlaying gate) --
+    // clamped again here since this is a renderer-supplied number crossing
+    // the IPC boundary, not because the renderer is untrusted so much as
+    // defense against a stale/bogus value ever inflating a day's total.
+    if (typeof elapsedSeconds === 'number' && elapsedSeconds > 0) {
+      const clamped = Math.min(elapsedSeconds, 10);
+      const key = localDateKey();
+      const activity = { ...activityStore.get() };
+      activity[key] = (activity[key] ?? 0) + clamped;
+      activityStore.set(activity);
+    }
   });
 
   ipcMain.handle('progress:clear', (_event, bookId) => {
@@ -1033,6 +1068,29 @@ function registerIpc() {
     progressStore.set(progress);
     refreshJumpList();
     return progress;
+  });
+
+  /**
+   * Lazy-fetched (not bundled into library:getState) since it's only needed
+   * when the Stats view is actually open. "Books finished"/"top authors and
+   * narrators" need no data from here -- they're computed renderer-side from
+   * the book list + progress already sent on every launch.
+   */
+  ipcMain.handle('stats:get', () => {
+    const activity = activityStore.get();
+
+    // A streak is still "alive" if today just hasn't happened yet -- only a
+    // full day with zero activity actually breaks it, so today's own (lack
+    // of) activity doesn't get counted against yesterday's real streak.
+    let streak = 0;
+    const cursor = new Date();
+    if (!activity[localDateKey(cursor)]) cursor.setDate(cursor.getDate() - 1);
+    while (activity[localDateKey(cursor)] > 0) {
+      streak += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+
+    return { activity, streak };
   });
 
   /**
@@ -1589,6 +1647,14 @@ app.whenReady().then(async () => {
   await Promise.all([
     progressStore.load(), bookmarksStore.load(),
     normalizationStore.load(), metadataStore.load(),
+    // pairingStore was never loaded here before -- a real pre-existing bug,
+    // not something new this store introduces: without this, pairingStore.get()
+    // always returned its constructor fallback ({}) for the whole session,
+    // so runPairingFill() saw every book as unchecked on every single launch
+    // (re-scanning the whole library every time) and the first write of the
+    // session would silently overwrite ebook-pairings.json's prior contents,
+    // including any manual picks, with data computed from that empty view.
+    pairingStore.load(), activityStore.load(),
   ]);
   {
     const state = libraryStore.get();
@@ -1649,6 +1715,7 @@ app.on('before-quit', (event) => {
   normalizationStore.flushSync();
   metadataStore.flushSync();
   pairingStore.flushSync();
+  activityStore.flushSync();
   // Best-effort, not awaited — the RPC pipe closing when this process exits
   // cleans up on Discord's side regardless, so this isn't worth delaying quit for.
   discord.shutdown();
