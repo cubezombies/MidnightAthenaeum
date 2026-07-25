@@ -7,6 +7,8 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+
+## [0.14.1] - 2026-07-25
 ### Fixed
 - **A scan could delete your whole library if the drive wasn't available.**
   If a library folder couldn't be read — drive disconnected, still spinning
