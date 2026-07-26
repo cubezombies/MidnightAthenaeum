@@ -13,6 +13,21 @@ const {
 } = require('./paths');
 const { isFinishedByPosition } = require('./finished');
 
+// Diagnostic-only, opt-in: a real user's machine (and this dev sandbox,
+// separately) both show a genuinely-detected NVIDIA GPU falling back to
+// disabled_software for gpu_compositing/rasterization -- the signature of
+// Chromium's built-in GPU blocklist rejecting a driver/hardware combination
+// it doesn't trust, which happens most often right after a new GPU
+// generation ships and the blocklist data hasn't caught up. This switch is
+// the standard way to test that theory: it forces Chromium to ignore its
+// own blocklist decision. Must be set before app is ready. Off by default
+// -- the blocklist exists because some combinations genuinely do crash or
+// corrupt under hardware compositing, so this is for testing the hypothesis,
+// not a default anyone should silently run with.
+if (process.env.MIDNIGHT_ATHENAEUM_IGNORE_GPU_BLOCKLIST === '1') {
+  app.commandLine.appendSwitch('ignore-gpu-blocklist');
+}
+
 app.setName('Midnight Athenaeum');
 // Matches build.appId in package.json — keeps the taskbar jump list, thumbbar
 // grouping, and shortcut identity consistent with what the installer registers.
@@ -1286,6 +1301,78 @@ function registerIpc() {
     diag(`!!! PLAYBACK ERROR code=${i.code} (${i.codeName}) src=${i.src ?? '?'} :: ${i.title ?? ''} ${i.message ? `| ${i.message}` : ''}`);
   });
 
+  // Real frame-pacing stalls, reported live from the renderer -- see app.js's
+  // rAF-delta monitor. Unlike PerformanceObserver('longtask'), which only
+  // sees the main thread's own JS blocking, this catches stalls in
+  // compositing/paint too (confirmed necessary: a synthetic worst-case test
+  // showed near-2-second delays with zero longtask entries reported). Not
+  // gated behind DIAG_VERBOSE -- these are rare by design (the monitor only
+  // reports deltas past a real jank threshold), so there is no noise cost to
+  // always capturing them.
+  ipcMain.on('perf:jank', (_event, info) => {
+    const i = info || {};
+    if (i.kind === 'long-gap') {
+      // Not a render stall -- rAF does not go quiet this long while the
+      // system is awake. Almost certainly sleep/suspend or deep background
+      // throttling with the app left open. Labeled distinctly so a multi-
+      // minute idle gap never reads as a catastrophic in-app freeze.
+      const mins = (i.deltaMs / 60000).toFixed(1);
+      diag(`(idle gap: ${mins}min with no activity, likely system sleep -- not app jank, visible=${i.visible ?? '?'})`);
+      return;
+    }
+    if (i.kind === 'cover-timing') {
+      // queue* is time spent waiting for a concurrency slot (points at
+      // COVER_LOAD_CONCURRENCY being too low for how many cards a big jump
+      // reveals at once, if large); load* is time from img.src assignment to
+      // settling (points at slow individual loads -- e.g. disk contention
+      // with the background scan -- regardless of the cap, if large).
+      diagMetrics(
+        `cover-timing: ${i.count} loads | `
+        + `queue-wait avg=${Math.round(i.queueAvgMs)}ms p90=${Math.round(i.queueP90Ms)}ms max=${Math.round(i.queueMaxMs)}ms | `
+        + `load-time avg=${Math.round(i.loadAvgMs)}ms p90=${Math.round(i.loadP90Ms)}ms max=${Math.round(i.loadMaxMs)}ms`,
+      );
+      return;
+    }
+    if (i.kind === 'cover-stuck') {
+      // A cover load that started (took one of the 6 concurrency slots) but
+      // never fired 'load' or 'error' at all within 8s -- almost certainly
+      // its card scrolled out of range mid-request and the browser silently
+      // abandoned it without erroring. Without the timeout that forces this
+      // slot back, a burst of these during one big scrollbar drag can leak
+      // every slot and wedge cover loading for the rest of the session (see
+      // STUCK_LOAD_TIMEOUT_MS in app.js).
+      diagMetrics(`cover-stuck: ${i.count} cover load(s) never settled, force-released after timeout`);
+      return;
+    }
+    if (i.kind === 'cover-drop') {
+      // How many queued cover loads got skipped because their card scrolled
+      // out of the window before its turn in the concurrency queue -- a rare
+      // one-off during ordinary scrolling is expected and harmless (see
+      // pumpCoverLoadQueue in app.js), but a large burst would mean covers
+      // are being dropped faster than they can load, which reads visually as
+      // "covers never finish appearing while scrolling."
+      diagMetrics(`cover-drop: ${i.count} queued cover load(s) skipped (card scrolled away before its turn)`);
+      return;
+    }
+    if (i.kind === 'scroll-stutter') {
+      // Logged for every scroll burst, not just ones past some threshold --
+      // a user reported real visual lag during scrolling that never showed
+      // up here, and the original (threshold-gated) version of this
+      // measured the wrong thing besides (render work per frame, not the
+      // gap between frames, which is what smoothness actually depends on).
+      // Better to see true numbers from ordinary scrolling too than to keep
+      // guessing where an alarm bar belongs. fps is 1000/avg-gap-ms, the
+      // direct "how often did the screen actually update" reading.
+      const fps = i.deltaMs > 0 ? (1000 / i.deltaMs).toFixed(0) : '?';
+      diagMetrics(`scroll: ~${fps}fps avg (avg gap=${Math.round(i.deltaMs)}ms max=${Math.round(i.maxMs)}ms over ${i.frameCount} frames)`);
+      return;
+    }
+    const heap = i.heapBeforeMB != null && i.heapAfterMB != null
+      ? ` heap=${i.heapBeforeMB}MB->${i.heapAfterMB}MB(${i.heapBeforeMB - i.heapAfterMB >= 0 ? '-' : '+'}${Math.abs(i.heapBeforeMB - i.heapAfterMB)}MB)`
+      : '';
+    diagMetrics(`!!! JANK ${Math.round(i.deltaMs)}ms gap (view=${i.view ?? '?'} visible=${i.visible ?? '?'} scrolling=${i.scrolling ?? '?'}${heap})`);
+  });
+
   ipcMain.handle('progress:save', (_event, { bookId, position, duration, speed, elapsedSeconds }) => {
     if (typeof bookId !== 'string' || typeof position !== 'number') return;
     const progress = { ...progressStore.get() };
@@ -1891,6 +1978,36 @@ function normalizeCoverPaths(libraryState) {
 }
 
 app.whenReady().then(async () => {
+  // GPU compositing status, logged once at startup. A user reported
+  // scrolling/navigation lag after the Electron 34 -> 43 upgrade; a
+  // sandboxed dev-environment test showed gpu_compositing/rasterization
+  // both falling back to software rendering, which would explain exactly
+  // that symptom -- but that sandbox has no GPU passthrough at all, so it
+  // cannot say whether this is an Electron 43 regression or just this
+  // environment. This line is what actually answers that, on real hardware.
+  try {
+    const gpu = app.getGPUFeatureStatus();
+    const disabled = Object.entries(gpu).filter(([, v]) => /disabled|software|unavailable/i.test(v));
+    diag(`gpu status: ${disabled.length ? disabled.map(([k, v]) => `${k}=${v}`).join(', ') : 'all accelerated'}`);
+    if (disabled.length) {
+      // Confirmed real (not a sandbox artifact) but constant across a
+      // lagging and a non-lagging run, so it isn't what flips -- this is
+      // for the separate, real question of *why* a real GPU is falling
+      // back to software at all. Field names verified against a real
+      // getGPUInfo('complete') response before shipping (no
+      // driverBugWorkarounds/blocklist-reason field actually exists on it,
+      // despite that being a reasonable-sounding guess).
+      const info = await app.getGPUInfo('complete').catch((err) => ({ error: err.message }));
+      const gpu = info.gpuDevice?.find((d) => d.active) ?? info.gpuDevice?.[0] ?? {};
+      diag(`gpu info: ${gpu.deviceString ?? '?'} vendor=0x${(gpu.vendorId ?? 0).toString(16)} `
+        + `device=0x${(gpu.deviceId ?? 0).toString(16)} driver=${gpu.driverVersion ?? '?'} `
+        + `renderer="${info.auxAttributes?.glRenderer ?? '?'}" `
+        + `ignoreGpuBlocklist=${app.commandLine.hasSwitch('ignore-gpu-blocklist')}`);
+    }
+  } catch (err) {
+    diag(`gpu status: unavailable (${err.message})`);
+  }
+
   try {
     await libraryStore.load(LIBRARY_FILE);
   } catch (err) {

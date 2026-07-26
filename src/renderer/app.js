@@ -183,6 +183,16 @@ const state = {
 let gridResizeObserver = null;
 let gridResizeDebounce = null;
 let gridScrollScheduled = false;
+// Sustained-choppiness tracking during active scrolling -- see the scroll
+// listener below. A real scrollbar-thumb drag delivers a continuous, rapid
+// stream of native scroll events that a scripted dispatchEvent() can't
+// replicate, so a single-frame jank threshold (see frameWatch further down)
+// may simply never be crossed by several moderately-slow frames in a row --
+// individually fine, but choppy as a sustained sequence. This tracks that
+// pattern specifically, scoped to periods of actual scroll activity.
+let scrollBurstFrameTimes = [];
+let scrollBurstLastFrame = 0;
+let scrollBurstFinalizeTimer = null;
 const SLEEP_FADE_SEC = 20;   // gentle fade over the final stretch
 const SLEEP_REWIND_SEC = 30; // rewind on resume after the timer stops you
 
@@ -336,6 +346,174 @@ function formatDurationLong(seconds) {
 
 /* ---------------- library grid ---------------- */
 
+/**
+ * Caps how many cover images load at once, instead of letting every card in
+ * a scroll jump fire its fetch simultaneously.
+ *
+ * The grid is already virtualized -- only visible-plus-buffer cards ever
+ * exist in the DOM -- so `img.loading = 'lazy'` (set below) does nothing
+ * useful here: every card that gets created is already within the range
+ * lazy-loading considers eligible to start immediately. A fast scrollbar
+ * drag can swap in ~50+ brand-new cards in one `replaceChildren()` call,
+ * and unlike http(s), a custom protocol scheme (`ab-media://`) isn't
+ * necessarily subject to the browser's usual per-origin connection cap --
+ * so all of them could start fetching at once. Confirmed as the real cause
+ * of reported scrolling lag: live instrumentation showed frame rate
+ * dropping to 18-27fps specifically during bursts of newly-requested cover
+ * images, with the main process's native buffer memory spiking into the
+ * hundreds of MB at the same moments.
+ *
+ * 6 matches the classic HTTP/1.1 per-origin connection limit most sites
+ * already implicitly design around -- a familiar, unsurprising amount of
+ * simultaneous loading, just enforced explicitly here since the platform
+ * doesn't do it for this scheme.
+ */
+const COVER_LOAD_CONCURRENCY = 6;
+let activeCoverLoads = 0;
+const coverLoadQueue = [];
+
+// Diagnostic-only: counts queued cover loads dropped because their card
+// scrolled away before its turn, batched into diagnostic.log every 2s so a
+// real burst of drops (vs. the rare expected one-off) is visible as a number,
+// not silently invisible.
+let coverDropCount = 0;
+let coverDropFlushTimer = null;
+function reportCoverDrop() {
+  coverDropCount += 1;
+  if (coverDropFlushTimer) return;
+  coverDropFlushTimer = setTimeout(() => {
+    const count = coverDropCount;
+    coverDropCount = 0;
+    coverDropFlushTimer = null;
+    window.api.reportJank?.({ kind: 'cover-drop', count });
+  }, 2000);
+}
+
+// Same batching as reportCoverDrop, for loads that never fired 'load' or
+// 'error' at all -- see the STUCK_LOAD_TIMEOUT_MS comment below.
+let coverStuckCount = 0;
+let coverStuckFlushTimer = null;
+function reportCoverStuck() {
+  coverStuckCount += 1;
+  if (coverStuckFlushTimer) return;
+  coverStuckFlushTimer = setTimeout(() => {
+    const count = coverStuckCount;
+    coverStuckCount = 0;
+    coverStuckFlushTimer = null;
+    window.api.reportJank?.({ kind: 'cover-stuck', count });
+  }, 2000);
+}
+
+// Diagnostic-only: how long covers actually take, split into the two things
+// that could each independently explain "covers take minutes to catch up
+// after a big jump" -- queueWaitMs (time sitting in coverLoadQueue before its
+// turn, which points at COVER_LOAD_CONCURRENCY being too low for how many
+// cards a big jump reveals at once) vs loadMs (time from img.src assignment
+// to settling, which points at slow individual loads -- e.g. disk contention
+// with the background scan -- regardless of the concurrency cap). Batched
+// the same way as the counters above.
+let coverTimings = [];
+let coverTimingFlushTimer = null;
+function percentile(sortedValues, p) {
+  if (!sortedValues.length) return 0;
+  return sortedValues[Math.min(sortedValues.length - 1, Math.floor(sortedValues.length * p))];
+}
+function reportCoverTiming(queueWaitMs, loadMs) {
+  coverTimings.push({ queueWaitMs, loadMs });
+  if (coverTimingFlushTimer) return;
+  coverTimingFlushTimer = setTimeout(() => {
+    const timings = coverTimings;
+    coverTimings = [];
+    coverTimingFlushTimer = null;
+    const waits = timings.map((t) => t.queueWaitMs).sort((a, b) => a - b);
+    const loads = timings.map((t) => t.loadMs).sort((a, b) => a - b);
+    const avg = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    window.api.reportJank?.({
+      kind: 'cover-timing',
+      count: timings.length,
+      queueAvgMs: avg(waits), queueMaxMs: waits[waits.length - 1], queueP90Ms: percentile(waits, 0.9),
+      loadAvgMs: avg(loads), loadMaxMs: loads[loads.length - 1], loadP90Ms: percentile(loads, 0.9),
+    });
+  }, 2000);
+}
+
+// An image that already started loading (activeCoverLoads incremented) can
+// have its card scroll out of the cached/buffered range before it finishes --
+// unlike the queued-but-not-yet-started case above (isConnected guard), the
+// only way this concurrency slot ever comes back is the img's own 'load' or
+// 'error' event, and there's no guarantee the browser fires either once the
+// element is disconnected mid-request. Left unbounded, enough of these during
+// one big scrollbar drag can leak every one of the 6 slots, permanently
+// wedging the whole queue for the rest of the session (covers below that
+// point never load again, but never show an error either -- exactly what
+// they'd look like if this were happening). This timeout guarantees forward
+// progress regardless of the exact browser behavior behind the leak.
+const STUCK_LOAD_TIMEOUT_MS = 8000;
+
+function pumpCoverLoadQueue() {
+  while (activeCoverLoads < COVER_LOAD_CONCURRENCY && coverLoadQueue.length) {
+    const { img, url, placeholderOpts, queuedAt } = coverLoadQueue.shift();
+    // The card this belonged to may have already scrolled back out of the
+    // window and been dropped (a fast, repeated drag can discard cards
+    // faster than their images finish loading) -- skip it rather than
+    // spend a concurrency slot on an image nobody can see, which would
+    // just delay whatever IS currently on screen behind it.
+    if (!img.isConnected) { reportCoverDrop(); continue; }
+    activeCoverLoads += 1;
+    const queueWaitMs = performance.now() - queuedAt;
+    const loadStartedAt = performance.now();
+    let settled = false;
+    const release = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(stuckTimer);
+      reportCoverTiming(queueWaitMs, performance.now() - loadStartedAt);
+      activeCoverLoads -= 1;
+      pumpCoverLoadQueue();
+    };
+    const stuckTimer = setTimeout(() => {
+      if (settled) return;
+      reportCoverStuck();
+      release();
+    }, STUCK_LOAD_TIMEOUT_MS);
+    img.addEventListener('load', () => { img.classList.add('cover-loaded'); release(); }, { once: true });
+    // A genuine failure (e.g. a stale DB cover path whose file no longer
+    // exists) must stay visible, not disappear into the same invisible state
+    // as "still queued" -- swapping in the normal "no cover" placeholder
+    // makes it read as an honest, deliberate state instead of a silent bug.
+    img.addEventListener('error', () => {
+      if (img.isConnected) img.replaceWith(buildCoverPlaceholder(placeholderOpts));
+      release();
+    }, { once: true });
+    img.src = url;
+  }
+}
+
+/** Queues a cover image load instead of assigning `img.src` directly -- see COVER_LOAD_CONCURRENCY above. */
+let coverPumpScheduled = false;
+function queueCoverLoad(img, url, placeholderOpts) {
+  coverLoadQueue.push({ img, url, placeholderOpts, queuedAt: performance.now() });
+  // Cards are built (and queueCoverLoad called) before the caller inserts
+  // them into the document -- pumping synchronously here would see every
+  // img as disconnected and drop them all via the isConnected guard above.
+  // Defer to the next frame so DOM insertion (e.g. replaceChildren) has
+  // already happened by the time we check.
+  if (coverPumpScheduled) return;
+  coverPumpScheduled = true;
+  requestAnimationFrame(() => {
+    coverPumpScheduled = false;
+    pumpCoverLoadQueue();
+  });
+}
+
+/** The "no cover" placeholder -- also used when a queued cover load genuinely fails (see pumpCoverLoadQueue). */
+function buildCoverPlaceholder({ className = 'placeholder', icon = 'icon-headphones' } = {}) {
+  const ph = document.createElement('div');
+  ph.className = className;
+  ph.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#${icon}"></use></svg>`;
+  return ph;
+}
+
 function buildCard(book, { badge, delegate } = {}) {
   const saved = state.progress[book.id];
   // A finished book always reads as a full bar, even if it was marked finished
@@ -355,15 +533,12 @@ function buildCard(book, { badge, delegate } = {}) {
   art.className = 'card-art';
   if (book.coverUrl) {
     const img = document.createElement('img');
-    img.src = book.coverThumbUrl || book.coverUrl;
     img.alt = `${book.title} cover`;
     img.loading = 'lazy';
+    queueCoverLoad(img, book.coverThumbUrl || book.coverUrl);
     art.append(img);
   } else {
-    const ph = document.createElement('div');
-    ph.className = 'placeholder';
-    ph.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-headphones"></use></svg>';
-    art.append(ph);
+    art.append(buildCoverPlaceholder());
   }
   if (badge) {
     const b = document.createElement('div');
@@ -584,15 +759,13 @@ function buildSeriesTile(group, { delegate } = {}) {
   if (first.book.coverUrl) {
     const img = document.createElement('img');
     img.className = 'series-cover';
-    img.src = first.book.coverThumbUrl || first.book.coverUrl;
     img.alt = `${group.name} series`;
     img.loading = 'lazy';
+    const placeholderOpts = { className: 'series-cover placeholder', icon: 'icon-book-open' };
+    queueCoverLoad(img, first.book.coverThumbUrl || first.book.coverUrl, placeholderOpts);
     art.append(img);
   } else {
-    const ph = document.createElement('div');
-    ph.className = 'series-cover placeholder';
-    ph.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-book-open"></use></svg>';
-    art.append(ph);
+    art.append(buildCoverPlaceholder({ className: 'series-cover placeholder', icon: 'icon-book-open' }));
   }
   const badge = document.createElement('div');
   badge.className = 'series-badge';
@@ -720,12 +893,36 @@ function computeGridWindow() {
   return { start: startRow * columns, end: Math.min(total, endRow * columns) };
 }
 
-// item index -> its current DOM card node. Only valid for the current
-// state.displayItems array -- cleared at the start of every
-// remeasureAndRewindow() (i.e. whenever displayItems itself might have
-// changed), so it only ever carries nodes across pure scroll events, where
-// reuse is safe because content hasn't changed, only which range is visible.
+// item index -> { node, item }. Entries are validated by identity (see
+// sameItem/getOrBuildNode below) rather than blown away wholesale on every
+// remeasureAndRewindow() -- a background detail/thumbnail fill (patchBooks)
+// calls renderLibrary() every ~25 books or ~1s while the grid is visible,
+// which used to clear this cache and rebuild every visible card each time.
+// That tore down in-flight cover loads before the (now-throttled, 6-at-a-time)
+// queue could finish them, so covers could flicker back to unloaded on a
+// large library mid-fill even though nothing about those specific books
+// changed. Comparing by the underlying book/series reference (which patchBooks
+// only replaces for the books it actually patched) lets untouched cards keep
+// their existing node -- and their already-loaded or in-flight <img> -- while
+// still rebuilding whichever handful of cards really did change.
 let gridNodeCache = new Map();
+
+/** True if two displayItems entries refer to the same underlying book/series. */
+function sameItem(a, b) {
+  if (!a || !b) return a === b;
+  if (a.type !== b.type) return false;
+  return a.type === 'series' ? a.series === b.series : a.book === b.book;
+}
+
+/** Returns the cached node for displayItems[i] if it's still valid, else builds and caches a fresh one. */
+function getOrBuildNode(i) {
+  const item = state.displayItems[i];
+  const cached = gridNodeCache.get(i);
+  if (cached && sameItem(cached.item, item)) return cached.node;
+  const node = buildGridItemCard(item);
+  gridNodeCache.set(i, { node, item });
+  return node;
+}
 
 /**
  * Replaces #grid's children with exactly the given item range and resizes
@@ -748,12 +945,7 @@ function renderGridWindow(range) {
 
   const nodes = [];
   for (let i = range.start; i < range.end; i += 1) {
-    let node = gridNodeCache.get(i);
-    if (!node) {
-      node = buildGridItemCard(state.displayItems[i]);
-      gridNodeCache.set(i, node);
-    }
-    nodes.push(node);
+    nodes.push(getOrBuildNode(i));
   }
   // Drop cache entries that fell out of the window so it doesn't grow
   // unbounded as the user scrolls through a large library.
@@ -783,19 +975,18 @@ function renderGridWindow(range) {
  * real rendered card; deciding what to render needs measurements, so this
  * always renders a small provisional batch of the *current* displayItems
  * first purely so there's something real to measure, then immediately
- * corrects to the real computed window. This can't reuse whatever cards
- * happen to already be in #grid as the probe instead -- those could be
- * leftovers from a different render (e.g. series tiles, which carry a
- * different `.card-title` margin-top than book cards -- see styles.css),
- * which would silently bake a wrong row height into gridMetrics before the
- * new content is even rendered.
+ * corrects to the real computed window. The provisional batch goes through
+ * getOrBuildNode (not a fresh build) so a card whose underlying book/series
+ * is unchanged since the last render keeps its existing node instead of
+ * being torn down -- getOrBuildNode's type check (sameItem) still rebuilds
+ * when a slot's content genuinely changed (e.g. series tiles left over from
+ * a different render, which carry a different `.card-title` margin-top than
+ * book cards -- see styles.css), so this can't silently bake a wrong row
+ * height into gridMetrics before the new content is even rendered.
  */
 function remeasureAndRewindow() {
-  // displayItems is about to represent possibly-entirely-different content --
-  // any cached nodes from before this point are no longer safe to reuse.
-  gridNodeCache.clear();
-
   if (!state.displayItems.length) {
+    gridNodeCache.clear();
     el.grid.replaceChildren();
     el.gridTopSpacer.style.height = '0px';
     el.gridBottomSpacer.style.height = '0px';
@@ -807,9 +998,7 @@ function remeasureAndRewindow() {
   const frag = document.createDocumentFragment();
   const provisional = Math.min(24, state.displayItems.length);
   for (let i = 0; i < provisional; i += 1) {
-    const node = buildGridItemCard(state.displayItems[i]);
-    gridNodeCache.set(i, node); // so renderGridWindow below can reuse these instead of rebuilding them
-    frag.append(node);
+    frag.append(getOrBuildNode(i)); // cached in gridNodeCache so renderGridWindow below can reuse these
   }
   el.grid.replaceChildren(frag);
 
@@ -857,9 +1046,49 @@ el.main.addEventListener('scroll', () => {
   if (gridScrollScheduled) return;
   gridScrollScheduled = true;
   requestAnimationFrame(() => {
+    const now = performance.now();
     gridScrollScheduled = false;
     if (!state.gridMetrics.rowHeight) return;
     renderGridWindow(computeGridWindow());
+
+    // Time SINCE THE PREVIOUS scroll-triggered frame, not how long this
+    // frame's own render work took. Those are different things: a fast
+    // 5ms render every 200ms is still a choppy ~5fps update rate, and
+    // measuring only the work-inside-one-frame (the original version of
+    // this code) would call that fine. Inter-frame gap is what visual
+    // smoothness during a drag actually depends on -- it also folds in
+    // anything happening between frames that isn't this function's own
+    // work (raw input delivery, compositor backlog, anything), which a
+    // pure work-duration measurement would never see at all.
+    const gap = scrollBurstLastFrame ? now - scrollBurstLastFrame : 0;
+    if (scrollBurstLastFrame && now - scrollBurstLastFrame < 500) {
+      scrollBurstFrameTimes.push(gap);
+    } else {
+      scrollBurstFrameTimes = [];
+    }
+    scrollBurstLastFrame = now;
+    clearTimeout(scrollBurstFinalizeTimer);
+    scrollBurstFinalizeTimer = setTimeout(() => {
+      const times = scrollBurstFrameTimes;
+      scrollBurstFrameTimes = [];
+      if (times.length < 3) return; // too short a burst to mean anything
+      const avg = times.reduce((a, b) => a + b, 0) / times.length;
+      const max = Math.max(...times);
+      // Always reported, not threshold-gated: a real user saw visual lag
+      // that the previous (threshold-gated, wrong-metric) version of this
+      // never logged at all. Better to see the real numbers from every
+      // scroll burst -- including ones that "should" be fine -- than to
+      // keep guessing where the alarm bar belongs.
+      window.api.reportJank?.({
+        kind: 'scroll-stutter',
+        deltaMs: avg,
+        maxMs: max,
+        frameCount: times.length,
+        view: 'library',
+        visible: document.visibilityState,
+        scrolling: true,
+      });
+    }, 400);
   });
 });
 
@@ -870,6 +1099,90 @@ gridResizeObserver = new ResizeObserver(() => {
   gridResizeDebounce = setTimeout(remeasureAndRewindow, 150);
 });
 gridResizeObserver.observe(el.main);
+
+/**
+ * Live frame-pacing monitor: reports a real stall to diagnostic.log the
+ * moment it happens, with what the app was doing at the time.
+ *
+ * PerformanceObserver('longtask') only sees the main thread's own JS
+ * blocking, not stalls in compositing/paint/GPU work -- confirmed via a
+ * synthetic worst-case test that showed near-2-second frame gaps with zero
+ * longtask entries reported. requestAnimationFrame's own delivery timing
+ * doesn't have that blind spot: if the compositor stalls, rAF is what's
+ * late, regardless of why. Runs for the app's lifetime, not just during
+ * known-heavy operations, since the whole point is not knowing in advance
+ * when a real stall will happen. Threshold (150ms, ~9 dropped frames at
+ * 60fps) is set well above ordinary scroll-frame cost so this stays silent
+ * during normal use and only fires on something a user would actually
+ * perceive as lag.
+ */
+const JANK_THRESHOLD_MS = 150;
+// A gap past this is not a render stall by any realistic reading of that
+// word -- rAF simply doesn't go quiet this long while the system is awake
+// and the page is running. Seen in real use: a 221,697ms gap, almost
+// certainly the machine sleeping (or the window hitting deep background
+// throttling) with the app left open, then resuming exactly where it left
+// off. Reporting that as "JANK 221697ms" is actively misleading in the log
+// -- it reads like a catastrophic stall when it is really just time passing
+// while nothing was happening. Logged as a distinct, clearly-labeled event
+// instead of folded into the same jank bucket real stutter data lives in.
+const LONG_GAP_MS = 5000;
+let lastFrameTime = performance.now();
+
+// Rolling ~2s window of heap-size samples, so a jank report can show what
+// the heap was doing *during* the gap, not just at report time. Two real
+// user sessions both showed a large `rss` drop lined up with a mid-playback
+// jank -- circumstantial from the outside (main-process rss reflects a lot
+// more than just JS heap), but directly checkable from here: if a major GC
+// swept memory during the exact stall, heapBefore will be well above
+// heapAfter. `performance.memory` is a non-standard but long-available
+// Chromium API, no special permission needed.
+const heapSamples = [];
+function sampleHeap(now) {
+  if (!performance.memory) return null;
+  const mb = performance.memory.usedJSHeapSize / 1024 / 1024;
+  heapSamples.push({ t: now, mb });
+  while (heapSamples.length && now - heapSamples[0].t > 2000) heapSamples.shift();
+  return mb;
+}
+
+function frameWatch(now) {
+  const delta = now - lastFrameTime;
+  lastFrameTime = now;
+  const heapNowMB = sampleHeap(now);
+  if (delta > LONG_GAP_MS) {
+    window.api.reportJank?.({
+      kind: 'long-gap',
+      deltaMs: delta,
+      visible: document.visibilityState,
+    });
+  } else if (delta > JANK_THRESHOLD_MS) {
+    const view = !el.libraryView.classList.contains('hidden') ? 'library'
+      : !el.bookView.classList.contains('hidden') ? 'book'
+        : !el.seriesView.classList.contains('hidden') ? 'series'
+          : !el.statsView.classList.contains('hidden') ? 'stats' : 'unknown';
+    // Heap sample from closest to when the stall actually started (now -
+    // delta), not "some time in the last 2s" -- a stale sample would blur
+    // together GC activity that happened well before or after this
+    // specific gap.
+    const stallStart = now - delta;
+    let before = null;
+    for (const s of heapSamples) {
+      if (s.t <= stallStart) before = s.mb;
+      else break;
+    }
+    window.api.reportJank?.({
+      deltaMs: delta,
+      view,
+      visible: document.visibilityState,
+      scrolling: gridScrollScheduled,
+      heapBeforeMB: before !== null ? Math.round(before) : null,
+      heapAfterMB: heapNowMB !== null ? Math.round(heapNowMB) : null,
+    });
+  }
+  requestAnimationFrame(frameWatch);
+}
+requestAnimationFrame(frameWatch);
 
 /* ---------------- series view ---------------- */
 

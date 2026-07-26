@@ -94,6 +94,7 @@ contextBridge.exposeInMainWorld('api', {
   // diagnostic.log next to what the media protocol did. The renderer only
   // ever learns "SRC_NOT_SUPPORTED", which on its own is undiagnosable.
   reportMediaError: (info) => ipcRenderer.send('media:error', info),
+  reportJank: (info) => ipcRenderer.send('perf:jank', info),
   onScanProgress: (cb) => {
     const listener = (_event, payload) => cb(payload);
     ipcRenderer.on('library:scan-progress', listener);

@@ -9,8 +9,8 @@
   --accent-soft: rgba(124, 108, 245, 0.16);
   --accent-hover: #6b59f0;
   --btn-hover: #2b2b3a;
-  --scrollbar: #33334333;
-  --scrollbar-hover: #444458;
+  --scrollbar: #4c4c60;
+  --scrollbar-hover: #5f5f78;
   --danger-bg: #3a2330;
   --danger-text: #ff8a8a;
   --faint: #6a6a80;
@@ -345,7 +345,17 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
   background: var(--bg-elev-2);
   border: 1px solid var(--line);
 }
-.card-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Covers load through a concurrency-limited queue (see queueCoverLoad in
+   app.js), so a card's <img> can sit with no src for a while after a big
+   scrollbar jump reveals many new cards at once. Chromium renders a
+   src-less (or not-yet-loaded) <img> with its alt text and a small broken-
+   image glyph -- indistinguishable from a real failure -- so it stays
+   invisible until 'load' actually fires (see the cover-loaded class toggle
+   in pumpCoverLoadQueue), leaving the card-art background showing instead of
+   a misleading "broken" glyph. A genuine load error is deliberately NOT
+   hidden by this -- that's real information, not queue backlog. */
+.card-art img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .15s ease; }
+.card-art img.cover-loaded { opacity: 1; }
 .card:hover .card-art { border-color: var(--accent); }
 /* Keyboard nav (cards are tabIndex=0): an explicit ring instead of the
    browser default, matching the accent-colored focus treatment used
