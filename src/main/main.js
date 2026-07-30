@@ -1795,7 +1795,11 @@ function registerIpc() {
     const book = state.books.find((b) => b.id === bookId);
     if (!book) return { ok: false, error: 'Book not found.' };
 
-    const results = await duplicates.trashBookFiles(book);
+    const exclusiveDir = state.books.filter((b) => b.sourceDir === book.sourceDir).length === 1;
+    const results = await duplicates.trashBookFiles(book, {
+      epubPath: pairingStore.get()[bookId]?.epubPath,
+      exclusiveDir,
+    });
     const failed = results.filter((r) => !r.ok);
     if (failed.length === results.length) {
       return { ok: false, error: `Could not move to the Recycle Bin: ${failed[0]?.error || 'unknown error'}` };
@@ -1805,6 +1809,63 @@ function registerIpc() {
     mainWindow?.webContents.send('library:changed', currentState());
     refreshJumpList();
     return { ok: true, partial: failed.length > 0 };
+  });
+
+  /**
+   * Removes one book from the library entirely, optionally trashing its
+   * files too (`deleteFiles: true` — reuses duplicates.trashBookFiles, so
+   * files go to the Recycle Bin, never a permanent delete, and only the
+   * book's own track files are touched, never its containing folder, which
+   * can hold unrelated sibling books).
+   *
+   * Unlike duplicates:remove, this also purges every other per-bookId store
+   * (progress, bookmarks, normalization, online-metadata override, ebook
+   * pairing, transcript) — duplicates:remove leaves those alone because a
+   * sibling copy of the same book might still need them, but here this
+   * bookId will never exist again, so leaving that data behind would just
+   * be permanent orphaned cruft in every one of those JSON files.
+   */
+  ipcMain.handle('library:deleteBook', async (_event, { bookId, deleteFiles } = {}) => {
+    if (typeof bookId !== 'string') return { ok: false, error: 'Invalid book.' };
+    const state = libraryStore.get();
+    const book = state.books.find((b) => b.id === bookId);
+    if (!book) return { ok: false, error: 'Book not found.' };
+
+    let partial = false;
+    if (deleteFiles) {
+      const exclusiveDir = state.books.filter((b) => b.sourceDir === book.sourceDir).length === 1;
+      const results = await duplicates.trashBookFiles(book, {
+        epubPath: pairingStore.get()[bookId]?.epubPath,
+        exclusiveDir,
+      });
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length === results.length) {
+        return { ok: false, error: `Could not move to the Recycle Bin: ${failed[0]?.error || 'unknown error'}` };
+      }
+      partial = failed.length > 0;
+    }
+
+    libraryStore.set({ ...state, books: state.books.filter((b) => b.id !== bookId) });
+
+    for (const store of [progressStore, bookmarksStore, normalizationStore, metadataStore, pairingStore]) {
+      const data = { ...store.get() };
+      if (Object.prototype.hasOwnProperty.call(data, bookId)) {
+        delete data[bookId];
+        store.set(data);
+      }
+    }
+    try {
+      const cached = onlineCoverPath(bookId);
+      if (fs.existsSync(cached)) fs.unlinkSync(cached);
+    } catch {
+      // Best effort — a leftover cached cover file isn't worth surfacing an error for.
+    }
+    transcriber.deleteTranscript(bookId);
+
+    const next = currentState();
+    mainWindow?.webContents.send('library:changed', next);
+    refreshJumpList();
+    return { ok: true, partial, state: next };
   });
 
   /**

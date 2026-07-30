@@ -212,6 +212,8 @@
               <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
             </button>
             <button id="readAlongBtn" class="btn btn-quiet">Read along</button>
+            <button id="removeBookBtn" class="btn btn-quiet book-delete-btn">Remove from library</button>
+            <button id="deleteBookBtn" class="btn btn-quiet book-delete-btn">Delete book (files too)…</button>
           </div>
           <div id="transcribeStatus" class="muted small transcribe-status hidden"></div>
         </div>
@@ -360,6 +362,11 @@
   <div id="toast" class="toast hidden" role="status" aria-live="polite">
     <span id="toastMsg" class="toast-msg"></span>
     <button id="toastUndo" class="toast-undo">Undo</button>
+  </div>
+
+  <div id="cardContextMenu" class="context-menu hidden" role="menu">
+    <button id="cardContextRemove" class="context-menu-item" role="menuitem">Remove from library</button>
+    <button id="cardContextDelete" class="context-menu-item context-menu-danger" role="menuitem">Delete book (files too)…</button>
   </div>
 
   <div id="dropOverlay" class="drop-overlay hidden" aria-hidden="true">

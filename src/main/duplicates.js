@@ -18,7 +18,17 @@
  * right next to cases that really were the same file copied twice.
  */
 
+const fsp = require('node:fs/promises');
+const path = require('node:path');
 const { shell } = require('electron');
+
+// Mirrors media-protocol.js's isInside — kept local rather than shared since
+// it's a pure 3-line check with no state, and the two modules are otherwise
+// unrelated.
+function isInside(parent, child) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
 
 function normalize(s) {
   return (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -73,23 +83,76 @@ function findDuplicateGroups(books) {
 }
 
 /**
- * Moves this book's own track files to the Recycle Bin — deliberately never
- * the containing folder, which can hold sibling books' files too (confirmed
- * in the same real library: a "Radio and Podcast Production" folder holds
- * four separate single-file books side by side). Recoverable via the
- * Recycle Bin, not a permanent delete.
+ * Moves this book's files to the Recycle Bin — how much gets trashed depends
+ * on `exclusiveDir` (the caller determines this from the full library: does
+ * any *other* book share this book's sourceDir?):
+ *
+ * - `exclusiveDir: true` — this book owns its folder outright, so the whole
+ *   folder is trashed in one shot. This sweeps up anything else sitting in
+ *   there too (cover art, an NFO file, show notes) that per-file trashing
+ *   would otherwise leave behind and treat as "something else is still
+ *   here" — since nothing else in the library points at this folder, there
+ *   is nothing else to protect.
+ * - `exclusiveDir: false` (or omitted) — the folder is shared with sibling
+ *   books (confirmed in a real library: a "Radio and Podcast Production"
+ *   folder holds four separate single-file books side by side), so only
+ *   this book's own track files are touched, never the folder wholesale.
+ *   If the folder happens to end up completely empty afterward — checked
+ *   with a real readdir, never assumed from the track list — it's trashed
+ *   too, so a delete doesn't leave a bare, empty directory behind.
+ *
+ * `epubPath` is this book's paired read-along ebook, if any (see
+ * ebook-pairing.js / the ebook:setPairing handler in main.js). If it lives
+ * inside this book's own folder, it's handled as part of whichever mode
+ * above applies (swept up by the whole-folder trash, or trashed alongside
+ * the tracks). An ebook picked from elsewhere on disk (pickEbookFile can
+ * point anywhere) is never trashed, in either mode — it's a file the user
+ * manages separately, not something a pairing record alone justifies
+ * deleting; only its pairing record is dropped, by the caller.
+ *
+ * Recoverable via the Recycle Bin in every case here, never a permanent
+ * delete.
  */
-async function trashBookFiles(book) {
-  const results = [];
-  for (const track of book.tracks) {
+async function trashBookFiles(book, { epubPath, exclusiveDir } = {}) {
+  const epubIsCoLocated = epubPath ? isInside(book.sourceDir, epubPath) : false;
+  let results;
+
+  if (exclusiveDir) {
     try {
-      // eslint-disable-next-line no-await-in-loop
-      await shell.trashItem(track.filePath);
-      results.push({ filePath: track.filePath, ok: true });
+      await shell.trashItem(book.sourceDir);
+      results = [{ filePath: book.sourceDir, ok: true }];
     } catch (err) {
-      results.push({ filePath: track.filePath, ok: false, error: err.message });
+      results = [{ filePath: book.sourceDir, ok: false, error: err.message }];
+    }
+  } else {
+    results = [];
+    for (const track of book.tracks) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await shell.trashItem(track.filePath);
+        results.push({ filePath: track.filePath, ok: true });
+      } catch (err) {
+        results.push({ filePath: track.filePath, ok: false, error: err.message });
+      }
+    }
+
+    if (epubIsCoLocated) {
+      try {
+        await shell.trashItem(epubPath);
+      } catch {
+        // Best effort — the audio files are already handled above either way.
+      }
+    }
+
+    try {
+      const remaining = await fsp.readdir(book.sourceDir);
+      if (remaining.length === 0) await shell.trashItem(book.sourceDir);
+    } catch {
+      // Best effort — the book's own files are already handled above either
+      // way; a directory that can't be read or removed just gets left behind.
     }
   }
+
   return results;
 }
 

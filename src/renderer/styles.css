@@ -154,6 +154,21 @@ body {
   direction: rtl; text-align: left; /* show the tail (…\Books\Fantasy) when it doesn't fit */
 }
 .folder-count { color: var(--muted); font-size: 12px; }
+.context-menu {
+  position: fixed; display: flex; flex-direction: column; width: 220px;
+  background: var(--bg-elev-2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 6px; gap: 2px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  z-index: 30; /* above .folders-menu (20) -- can be opened while it's open */
+}
+.context-menu-item {
+  display: block; width: 100%; text-align: left; background: transparent; border: none;
+  color: var(--text); font: inherit; cursor: pointer;
+  padding: 8px 10px; border-radius: 7px;
+}
+.context-menu-item:hover, .context-menu-item:focus-visible { background: var(--bg-elev); outline: none; }
+.context-menu-danger:hover, .context-menu-danger:focus-visible { background: var(--danger-bg); color: var(--danger-text); }
+
 .folder-remove {
   background: transparent; border: none; color: var(--muted); cursor: pointer;
   padding: 4px 8px; border-radius: 6px; font-size: 14px; flex-shrink: 0;
@@ -798,6 +813,9 @@ body.playing .toast { bottom: calc(var(--player-h) + 20px); }
 }
 .dupe-copy-remove:hover { background: var(--danger-bg); color: var(--danger-text); }
 .dupe-copy-remove:disabled { opacity: .5; cursor: default; }
+
+.book-delete-btn:hover { background: var(--danger-bg); color: var(--danger-text); }
+.book-delete-btn:disabled { opacity: .5; cursor: default; }
 
 /* ---------- Reorganize library by author ---------- */
 .reorganize-modal { width: 620px; }

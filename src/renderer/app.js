@@ -39,6 +39,8 @@ const el = {
   searchTranscriptBtn: $('searchTranscriptBtn'), captionsBtn: $('captionsBtn'),
   deleteTranscriptBtn: $('deleteTranscriptBtn'), transcribeStatus: $('transcribeStatus'),
   captionsBar: $('captionsBar'),
+  removeBookBtn: $('removeBookBtn'), deleteBookBtn: $('deleteBookBtn'),
+  cardContextMenu: $('cardContextMenu'), cardContextRemove: $('cardContextRemove'), cardContextDelete: $('cardContextDelete'),
   readAlongBtn: $('readAlongBtn'), readAlongPanel: $('readAlongPanel'), readAlongTitle: $('readAlongTitle'),
   readAlongChangeBtn: $('readAlongChangeBtn'), readAlongCloseBtn: $('readAlongCloseBtn'),
   readAlongNav: $('readAlongNav'), readAlongPrevBtn: $('readAlongPrevBtn'),
@@ -2577,6 +2579,99 @@ el.finishedToggleBtn.addEventListener('click', () => {
   setBookFinished(book, !currentlyFinished);
 });
 
+/**
+ * Removes a book from the library, optionally trashing its files too.
+ * Shared by the book detail view's buttons (book = state.current) and the
+ * grid's right-click context menu (book = whatever card was right-clicked,
+ * which may not be open at all). Mirrors removeDuplicateCopy's
+ * confirm-then-call-then-toast shape, but applies the returned fresh state
+ * directly (applyState) instead of a local row.remove() -- applyState
+ * already handles both "was viewing this book -> back to the library" and
+ * "was just looking at the grid -> nothing else to do" on its own.
+ */
+async function deleteBookFlow(book, deleteFiles, button) {
+  const msg = deleteFiles
+    ? `Delete "${book.title}"?\n\n${book.sourceDir}\n\n`
+      + 'Its files will be moved to the Recycle Bin, and all progress, bookmarks, and other '
+      + "data for it will be removed. You can restore the files from the Recycle Bin if this "
+      + 'was a mistake, but the library data cannot be recovered.'
+    : `Remove "${book.title}" from your library?\n\n`
+      + 'The files on disk are not touched, but progress, bookmarks, and other data for it '
+      + 'will be removed.';
+  if (!window.confirm(msg)) return;
+
+  if (button) button.disabled = true;
+  const result = await window.api.deleteBook({ bookId: book.id, deleteFiles });
+  if (!result.ok) {
+    showToast(result.error || 'Could not remove that book.');
+    if (button) button.disabled = false;
+    return;
+  }
+
+  if (state.playing?.id === book.id) {
+    el.audio.pause();
+    state.playing = null;
+    state.trackIndex = -1;
+  }
+  applyState(result.state);
+  showToast(
+    result.partial
+      ? 'Removed from library (some files could not be moved to the Recycle Bin).'
+      : (deleteFiles ? 'Book deleted.' : 'Removed from library.'),
+  );
+}
+el.removeBookBtn.addEventListener('click', () => {
+  if (state.current) deleteBookFlow(state.current, false, el.removeBookBtn);
+});
+el.deleteBookBtn.addEventListener('click', () => {
+  if (state.current) deleteBookFlow(state.current, true, el.deleteBookBtn);
+});
+
+/* ---------------- library card right-click menu ---------------- */
+
+let contextMenuBookId = null;
+
+function closeCardContextMenu() {
+  if (el.cardContextMenu.classList.contains('hidden')) return;
+  el.cardContextMenu.classList.add('hidden');
+  contextMenuBookId = null;
+}
+
+/** Opens the menu at (x, y), clamped so it never renders off the right/bottom edge. */
+function openCardContextMenu(bookId, x, y) {
+  contextMenuBookId = bookId;
+  el.cardContextMenu.classList.remove('hidden');
+  // Measure after unhiding -- offsetWidth/Height are 0 on a display:none element.
+  const { offsetWidth: w, offsetHeight: h } = el.cardContextMenu;
+  el.cardContextMenu.style.left = `${Math.min(x, window.innerWidth - w - 4)}px`;
+  el.cardContextMenu.style.top = `${Math.min(y, window.innerHeight - h - 4)}px`;
+}
+
+el.grid.addEventListener('contextmenu', (e) => {
+  const card = e.target.closest('.card');
+  if (!card || !card.dataset.bookId) return; // series tiles have no per-book delete action
+  e.preventDefault();
+  openCardContextMenu(card.dataset.bookId, e.clientX, e.clientY);
+});
+
+el.cardContextRemove.addEventListener('click', () => {
+  const bookId = contextMenuBookId;
+  closeCardContextMenu();
+  const book = state.books.find((b) => b.id === bookId);
+  if (book) deleteBookFlow(book, false);
+});
+el.cardContextDelete.addEventListener('click', () => {
+  const bookId = contextMenuBookId;
+  closeCardContextMenu();
+  const book = state.books.find((b) => b.id === bookId);
+  if (book) deleteBookFlow(book, true);
+});
+
+document.addEventListener('click', (e) => {
+  if (!el.cardContextMenu.contains(e.target)) closeCardContextMenu();
+});
+el.main.addEventListener('scroll', closeCardContextMenu);
+
 el.bookmarkBtn.addEventListener('click', () => addBookmark());
 el.bookmarkHereBtn.addEventListener('click', () => addBookmark());
 
@@ -3715,7 +3810,8 @@ document.addEventListener('keydown', (e) => {
       }
       break;
     case 'Escape':
-      if (!el.sleepMenu.classList.contains('hidden')) openSleepMenu(false);
+      if (!el.cardContextMenu.classList.contains('hidden')) closeCardContextMenu();
+      else if (!el.sleepMenu.classList.contains('hidden')) openSleepMenu(false);
       else if (!el.foldersMenu.classList.contains('hidden')) openFoldersMenu(false);
       else if (!el.toast.classList.contains('hidden')) hideToast();
       else if (el.libraryView.classList.contains('hidden')) goBack();

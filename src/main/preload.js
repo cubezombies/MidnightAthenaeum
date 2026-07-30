@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('api', {
   addFolder: () => ipcRenderer.invoke('library:addFolder'),
   addFolderPaths: (paths) => ipcRenderer.invoke('library:addFolderPaths', paths),
   removeFolder: (folder) => ipcRenderer.invoke('library:removeFolder', folder),
+  deleteBook: (payload) => ipcRenderer.invoke('library:deleteBook', payload),
   // File.path was removed from the renderer for security; this is the current
   // replacement, needed to resolve a drag-and-dropped folder's real path.
   getPathForFile: (file) => webUtils.getPathForFile(file),
