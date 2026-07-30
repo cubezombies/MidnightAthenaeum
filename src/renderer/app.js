@@ -49,6 +49,10 @@ const el = {
   transcriptModal: $('transcriptModal'), transcriptModalClose: $('transcriptModalClose'),
   transcriptSearchForm: $('transcriptSearchForm'), transcriptQuery: $('transcriptQuery'),
   transcriptStatus: $('transcriptStatus'), transcriptResults: $('transcriptResults'),
+  audibleActivationModal: $('audibleActivationModal'), audibleActivationModalClose: $('audibleActivationModalClose'),
+  audibleActivationForm: $('audibleActivationForm'), audibleActivationInput: $('audibleActivationInput'),
+  audibleActivationStatus: $('audibleActivationStatus'), audibleActivationSave: $('audibleActivationSave'),
+  audibleActivationToggle: $('audibleActivationToggle'),
   duplicatesModal: $('duplicatesModal'), duplicatesModalClose: $('duplicatesModalClose'),
   duplicatesFilter: $('duplicatesFilter'), duplicatesStatus: $('duplicatesStatus'),
   duplicatesList: $('duplicatesList'),
@@ -560,6 +564,13 @@ function buildCard(book, { badge, delegate } = {}) {
     eb.title = 'Ebook available — Read along from the book view';
     eb.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-book-open"></use></svg>';
     art.append(eb);
+  }
+  if (book.isAudibleOrigin) {
+    const ab = document.createElement('div');
+    ab.className = 'audible-badge';
+    ab.textContent = 'AUDIBLE';
+    ab.title = 'Decrypted from an Audible .aax file';
+    art.append(ab);
   }
   if (pct > 0) {
     const bar = document.createElement('div');
@@ -3352,6 +3363,70 @@ function updateCaption() {
   el.captionsBar.textContent = data.segments[idx].text;
   el.captionsBar.classList.remove('hidden');
 }
+
+/* ----------------
+ * Audible activation bytes (File > Set Audible activation bytes…) — the one
+ * part of the Audible-decrypt feature that needs a renderer UI at all; the
+ * actual pick-a-file-and-decrypt flow is entirely main-process-driven (see
+ * startAaxDecryptFlow in main.js), reachable straight from the File menu
+ * with no modal of its own, and reported here only via toasts.
+ * ---------------- */
+
+function closeAudibleActivationModal() {
+  el.audibleActivationModal.classList.add('hidden');
+}
+
+async function openAudibleActivationModal() {
+  el.audibleActivationModal.classList.remove('hidden');
+  el.audibleActivationStatus.textContent = '';
+  el.audibleActivationInput.value = (await window.api.getAudibleActivationBytes()) || '';
+  // Masked by default on every open, even if it was revealed last time —
+  // this value is visible in whatever screen recording/screenshot brought
+  // you here to begin with, no reason to leave it that way going forward.
+  el.audibleActivationInput.type = 'password';
+  el.audibleActivationToggle.textContent = 'Show';
+  el.audibleActivationToggle.setAttribute('aria-pressed', 'false');
+  el.audibleActivationInput.focus();
+}
+window.api.onOpenAudibleActivation(openAudibleActivationModal);
+el.audibleActivationModalClose.addEventListener('click', closeAudibleActivationModal);
+el.audibleActivationModal.addEventListener('click', (e) => {
+  if (e.target === el.audibleActivationModal) closeAudibleActivationModal();
+});
+el.audibleActivationToggle.addEventListener('click', () => {
+  const revealed = el.audibleActivationInput.type === 'text';
+  el.audibleActivationInput.type = revealed ? 'password' : 'text';
+  el.audibleActivationToggle.textContent = revealed ? 'Show' : 'Hide';
+  el.audibleActivationToggle.setAttribute('aria-pressed', String(!revealed));
+});
+el.audibleActivationModal.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.stopPropagation(); closeAudibleActivationModal(); }
+});
+el.audibleActivationForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  el.audibleActivationSave?.setAttribute('disabled', 'true');
+  const result = await window.api.setAudibleActivationBytes(el.audibleActivationInput.value.trim());
+  el.audibleActivationSave?.removeAttribute('disabled');
+  if (!result.ok) {
+    el.audibleActivationStatus.textContent = result.error;
+    return;
+  }
+  closeAudibleActivationModal();
+  showToast('Audible activation bytes saved.');
+});
+
+// The actual decrypt job is a single fire-and-forget main-process action
+// (File > Decrypt Audible file…) with no button of its own to disable/
+// re-enable here -- just report the outcome.
+window.api.onAudibleProgress((info) => {
+  if (info.phase === 'running') {
+    showToast(`Decrypting "${info.fileName}"…`);
+  } else if (info.phase === 'complete') {
+    showToast(`Decrypted "${info.fileName}" — add it to your library from Folders to play it.`);
+  } else if (info.phase === 'error') {
+    showToast(`Could not decrypt that file — ${info.error}`);
+  }
+});
 
 /* ----------------
  * Duplicate books (File > Find duplicate books…) — reads the already-scanned

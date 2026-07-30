@@ -65,6 +65,8 @@ contextBridge.exposeInMainWorld('api', {
   pickEbookFile: () => ipcRenderer.invoke('ebook:pickFile'),
   getEbookToc: (bookId) => ipcRenderer.invoke('ebook:getToc', bookId),
   getEbookSpineHtml: (payload) => ipcRenderer.invoke('ebook:getSpineHtml', payload),
+  getAudibleActivationBytes: () => ipcRenderer.invoke('audible:getActivationBytes'),
+  setAudibleActivationBytes: (value) => ipcRenderer.invoke('audible:setActivationBytes', value),
 
   onLibraryChanged: (cb) => {
     const listener = (_event, state) => cb(state);
@@ -130,6 +132,16 @@ contextBridge.exposeInMainWorld('api', {
     const listener = () => cb();
     ipcRenderer.on('duplicates:open', listener);
     return () => ipcRenderer.off('duplicates:open', listener);
+  },
+  onOpenAudibleActivation: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('audible:openActivationModal', listener);
+    return () => ipcRenderer.off('audible:openActivationModal', listener);
+  },
+  onAudibleProgress: (cb) => {
+    const listener = (_event, info) => cb(info);
+    ipcRenderer.on('audible:progress', listener);
+    return () => ipcRenderer.off('audible:progress', listener);
   },
   onOpenReorganize: (cb) => {
     const listener = () => cb();

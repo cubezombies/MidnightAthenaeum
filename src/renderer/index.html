@@ -457,6 +457,35 @@
     </div>
   </div>
 
+  <div id="audibleActivationModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="audibleActivationModalTitle">
+    <div class="modal-box audible-activation-modal">
+      <div class="modal-header">
+        <h3 id="audibleActivationModalTitle">Audible activation bytes</h3>
+        <button id="audibleActivationModalClose" class="icon-btn" aria-label="Close"><svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg></button>
+      </div>
+      <p class="muted small">
+        Used only to decrypt your own .aax files locally via ffmpeg's
+        <code>-activation_bytes</code> option — never sent anywhere. Obtain
+        this value through your own means; this app does not fetch it from
+        Audible. Leave blank to clear it.
+      </p>
+      <p class="muted small">
+        Stored locally like the rest of this app's data. While a decrypt is
+        actually running, ffmpeg briefly receives this value as a command-line
+        argument, which other processes on your own machine could in
+        principle read from the process list for that short window — an
+        inherent limit of how ffmpeg's decryption option works, not something
+        this app can avoid.
+      </p>
+      <form id="audibleActivationForm" class="audible-activation-form">
+        <input id="audibleActivationInput" type="password" placeholder="8 hex characters, e.g. 1A2B3C4D" maxlength="8" autocomplete="off" spellcheck="false" aria-label="Activation bytes" />
+        <button type="button" id="audibleActivationToggle" class="btn btn-quiet" aria-pressed="false">Show</button>
+        <button type="submit" id="audibleActivationSave" class="btn">Save</button>
+      </form>
+      <div id="audibleActivationStatus" class="muted small" role="status" aria-live="polite"></div>
+    </div>
+  </div>
+
   <div id="duplicatesModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="duplicatesModalTitle">
     <div class="modal-box duplicates-modal">
       <div class="modal-header">

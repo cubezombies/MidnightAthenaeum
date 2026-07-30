@@ -72,6 +72,25 @@ module.exports = {
   // keyed, deliberately not book-keyed (see src/main/main.js's stats:get and
   // progress:save handlers). Powers total time listened / streak / pace.
   ACTIVITY_FILE: path.join(DATA_ROOT, 'activity.json'),
+  // { activationBytes: string|null } -- the user's own Audible account
+  // activation bytes, entered manually via File > Set Audible activation
+  // bytes…. Used only as an argument to the bundled ffmpeg binary when
+  // decrypting a .aax file the user already owns (see audible.js);
+  // never transmitted anywhere.
+  AAX_ACTIVATION_FILE: path.join(DATA_ROOT, 'audible-activation.json'),
+  // { [bookId]: true } -- marks a book scanned from a file this app
+  // decrypted from Audible's .aax format, so the library card can show an
+  // "Audible" badge (toClientBook in main.js). Written once, at the moment
+  // File > Decrypt Audible file… finishes -- the id is predicted from the
+  // output path via the same hashId() the scanner will later compute for
+  // that same file.
+  AUDIBLE_SOURCES_FILE: path.join(DATA_ROOT, 'audible-sources.json'),
+  // { [aaxFilePath]: true } -- every .aax file the "found N Audible files,
+  // decrypt now?" prompt has ever asked about, whether the user said yes or
+  // no. Checked so a file already offered (in either newly-added-folder or
+  // explicit-rescan form) is never offered again, even for a folder that's
+  // been part of the library for a while.
+  AAX_OFFERED_FILE: path.join(DATA_ROOT, 'audible-offered.json'),
   // Per-book timestamped transcripts (opt-in, local Whisper transcription).
   TRANSCRIPTS_DIR: path.join(DATA_ROOT, 'transcripts'),
   // The downloaded ggml model file(s) — large (100MB+), kept out of backups

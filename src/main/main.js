@@ -9,7 +9,8 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 const {
   USER_DATA, LIBRARY_FILE, LIBRARY_DB_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
   METADATA_FILE, DATA_ROOT, OS_DEFAULT_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, BACKUP_DIR,
-  REORG_ID_MAP_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, setDataLocation, clearDataLocation,
+  REORG_ID_MAP_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, AAX_ACTIVATION_FILE, AUDIBLE_SOURCES_FILE,
+  AAX_OFFERED_FILE, setDataLocation, clearDataLocation,
 } = require('./paths');
 const { isFinishedByPosition } = require('./finished');
 
@@ -161,6 +162,7 @@ const duplicates = require('./duplicates');
 const reorganizer = require('./reorganize');
 const epub = require('./epub');
 const ebookPairing = require('./ebook-pairing');
+const audible = require('./audible');
 
 registerScheme();
 
@@ -184,6 +186,12 @@ const pairingStore = new JsonStore(EBOOK_PAIRING_FILE, {});
 // and the backup-restore/reorganize flushSync clusters (nothing there could
 // ever need to remap a date key).
 const activityStore = new JsonStore(ACTIVITY_FILE, {});
+// { activationBytes: string|null } -- see audible.js.
+const activationStore = new JsonStore(AAX_ACTIVATION_FILE, { activationBytes: null });
+// { [bookId]: true } -- see AUDIBLE_SOURCES_FILE in paths.js.
+const audibleStore = new JsonStore(AUDIBLE_SOURCES_FILE, {});
+// { [aaxFilePath]: true } -- see AAX_OFFERED_FILE in paths.js.
+const aaxOfferedStore = new JsonStore(AAX_OFFERED_FILE, {});
 
 let mainWindow = null;
 let scanning = false;
@@ -205,13 +213,13 @@ function newBookId(book, newSourceDir, newTrackPaths) {
 
 /**
  * Carries progress, bookmarks, normalization gain, metadata overrides,
- * ebook pairing, and a transcript over from one book id to another — needed
- * whenever a reorganize (or its undo) changes a book's id out from under
- * data that was keyed by the old one.
+ * ebook pairing, Audible-origin marker, and a transcript over from one book
+ * id to another — needed whenever a reorganize (or its undo) changes a
+ * book's id out from under data that was keyed by the old one.
  */
 function remapIdKeyedStores(oldId, newId) {
   if (oldId === newId) return;
-  for (const store of [progressStore, bookmarksStore, normalizationStore, metadataStore, pairingStore]) {
+  for (const store of [progressStore, bookmarksStore, normalizationStore, metadataStore, pairingStore, audibleStore]) {
     const data = store.get();
     if (Object.prototype.hasOwnProperty.call(data, oldId)) {
       const next = { ...data };
@@ -349,6 +357,9 @@ function toClientBook(book) {
     // and ebook-pairing.js. Undefined (falsy) until the background pairing
     // fill or an on-demand Read Along check has actually looked.
     hasEbook: pairingStore.get()[book.id]?.status === 'matched',
+    // Powers the "Audible" card badge — set once, at the moment File >
+    // Decrypt Audible file… finishes (see audibleStore / startAaxDecryptFlow).
+    isAudibleOrigin: Boolean(audibleStore.get()[book.id]),
   };
 }
 
@@ -477,6 +488,162 @@ function openAbout() {
   });
   aboutWindow.webContents.on('will-navigate', (event) => event.preventDefault());
   aboutWindow.on('closed', () => { aboutWindow = null; });
+}
+
+/**
+ * Picks a `<basename>.m4b` next to `aaxPath` that doesn't already exist,
+ * trying `<basename> (2).m4b`, `(3)`, etc. rather than silently overwriting
+ * something already there.
+ */
+function uniqueOutputPath(aaxPath) {
+  const dir = path.dirname(aaxPath);
+  const base = path.basename(aaxPath, path.extname(aaxPath));
+  let candidate = path.join(dir, `${base}.m4b`);
+  let n = 2;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(dir, `${base} (${n}).m4b`);
+    n += 1;
+  }
+  return candidate;
+}
+
+/**
+ * Decrypts one .aax, pushing 'audible:progress' events so the renderer can
+ * toast the outcome, and — on success — predicts the resulting .m4b's future
+ * book id (hashId of the exact output path, the same function scanLibrary
+ * will later compute for that same file) and records it in audibleStore so
+ * toClientBook can show the "Audible" card badge the moment it's scanned.
+ * Shared by both the single-file flow (startAaxDecryptFlow) and the
+ * newly-added-folder batch offer (maybeOfferAaxDecrypt) below.
+ */
+async function decryptOneAaxFile(aaxPath, activationBytes) {
+  const outputPath = uniqueOutputPath(aaxPath);
+  mainWindow?.webContents.send('audible:progress', { phase: 'running', fileName: path.basename(aaxPath) });
+  try {
+    await audible.decryptAax(aaxPath, outputPath, activationBytes);
+    audibleStore.set({ ...audibleStore.get(), [hashId(outputPath)]: true });
+    mainWindow?.webContents.send('audible:progress', { phase: 'complete', fileName: path.basename(outputPath) });
+    return true;
+  } catch (err) {
+    mainWindow?.webContents.send('audible:progress', { phase: 'error', error: err.message });
+    return false;
+  }
+}
+
+/**
+ * File > Decrypt Audible file (.aax)… — entirely main-process-driven (native
+ * file dialog, then a background ffmpeg job), same shape as createBackup()/
+ * changeDataLocation() below: the renderer only ever sees the result, pushed
+ * as an 'audible:progress' event so it can show a toast. Requires activation
+ * bytes to already be set (File > Set Audible activation bytes…, which -does-
+ * need a renderer modal, since it's the one part of this feature that
+ * actually needs a text field).
+ *
+ * The decrypted .m4b is written next to the source .aax, which is never
+ * itself touched, moved, or deleted — the user adds the result to their
+ * library the normal way (Folders > Add folder, or it's picked up by the
+ * next scan if it already lands under a library folder).
+ */
+async function startAaxDecryptFlow() {
+  if (!mainWindow) return;
+
+  const { activationBytes } = activationStore.get();
+  if (!audible.isValidActivationBytes(activationBytes)) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      message: 'Set your Audible activation bytes first',
+      detail: 'File → Set Audible activation bytes… — needed once, before decrypting any .aax file.',
+    });
+    return;
+  }
+  if (audible.isDecrypting()) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      message: 'Already decrypting a file — wait for it to finish first.',
+    });
+    return;
+  }
+  if (!audible.isAvailable()) {
+    dialog.showMessageBox(mainWindow, { type: 'error', message: 'ffmpeg is not available in this build.' });
+    return;
+  }
+
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose an Audible .aax file to decrypt',
+    properties: ['openFile'],
+    filters: [{ name: 'Audible AAX', extensions: ['aax'] }],
+  });
+  if (result.canceled || !result.filePaths.length) return;
+
+  await decryptOneAaxFile(result.filePaths[0], activationBytes);
+}
+
+/**
+ * Offers a batch decrypt for any .aax file under `dirs` that (a) has no
+ * decrypted .m4b sibling yet and (b) has never been offered before — a
+ * batch alternative to picking files one at a time via the File-menu action
+ * above. Two independent call sites feed this: addFoldersToLibrary (just
+ * the newly-added directories, cheap — nothing else changed) and an
+ * explicit deep rescan (every library folder, since that's the one point a
+ * file dropped into an *existing* folder actually gets noticed — this was
+ * missed in the first version of this feature: a folder added before this
+ * feature existed, or before this file was dropped into it, is already
+ * tracked and would otherwise never be checked at all).
+ *
+ * Every file this ever asks about gets recorded in aaxOfferedStore
+ * immediately, regardless of the user's answer — so declining, or even just
+ * closing the dialog, means it's never asked again for that exact path.
+ * Trying it again later is still one click away via the single-file
+ * File-menu action, which needs no such tracking since it's already an
+ * explicit per-file choice every time.
+ *
+ * Runs sequentially, not in parallel — decryptAax already only allows one
+ * job at a time, and a whole folder's worth of Audible files decrypting
+ * unattended is exactly the scenario where wrong activation bytes (which
+ * fail silently — see audible.js) would do the most damage, so this still
+ * requires one explicit up-front confirmation rather than proceeding
+ * silently, same as the single-file flow always has.
+ */
+async function maybeOfferAaxDecrypt(dirs) {
+  if (!mainWindow || !dirs.length) return;
+
+  const candidates = await audible.findUndecryptedAaxFiles(dirs);
+  const offered = aaxOfferedStore.get();
+  const aaxFiles = candidates.filter((p) => !offered[p]);
+  if (!aaxFiles.length) return;
+
+  const count = aaxFiles.length;
+  const { activationBytes } = activationStore.get();
+  if (!audible.isValidActivationBytes(activationBytes)) {
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      message: `Found ${count} new Audible file${count === 1 ? '' : 's'}`,
+      detail: 'Set your Audible activation bytes first (File → Set Audible activation bytes…) to decrypt '
+        + `${count === 1 ? 'it' : 'them'} — or decrypt one at a time later via File → Decrypt Audible file….`,
+    });
+    // Not marked as offered: activation bytes weren't set, so this genuinely
+    // wasn't a real yes/no choice yet — worth asking again once they are.
+    return;
+  }
+
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['Decrypt now', 'Not now'],
+    defaultId: 0,
+    cancelId: 1,
+    message: `Found ${count} new Audible file${count === 1 ? '' : 's'}`,
+    detail: `Decrypt ${count === 1 ? 'it' : 'them'} now so ${count === 1 ? 'it' : 'they'} can be added to your `
+      + `library? The original .aax file${count === 1 ? ' is' : 's are'} never modified — this can also be done `
+      + 'one file at a time later via File → Decrypt Audible file….',
+  });
+
+  aaxOfferedStore.set({ ...offered, ...Object.fromEntries(aaxFiles.map((p) => [p, true])) });
+  if (response !== 0) return;
+
+  for (const aaxPath of aaxFiles) {
+    // eslint-disable-next-line no-await-in-loop
+    await decryptOneAaxFile(aaxPath, activationBytes);
+  }
 }
 
 /**
@@ -766,6 +933,9 @@ function buildMenu() {
         { label: 'Find duplicate books…', click: () => mainWindow?.webContents.send('duplicates:open') },
         { label: 'Reorganize library by author…', click: () => mainWindow?.webContents.send('reorganize:open') },
         { label: 'Undo last reorganization…', click: () => mainWindow?.webContents.send('reorganize:undo-requested') },
+        { type: 'separator' },
+        { label: 'Set Audible activation bytes…', click: () => mainWindow?.webContents.send('audible:openActivationModal') },
+        { label: 'Decrypt Audible file (.aax)…', click: () => startAaxDecryptFlow() },
         { type: 'separator' },
         { role: 'quit' },
       ],
@@ -1212,6 +1382,18 @@ async function runScan({ deep = false } = {}) {
       .then(() => runPairingFill())
       .then(() => runThumbnailFill())
       .catch((err) => console.error('[scan] background fill failed:', err));
+
+    // Undecrypted-Audible-file detection only runs on an explicit deep
+    // rescan (File > Rescan library), never a routine/automatic one — this
+    // is the one point a .aax dropped into a folder that's been part of the
+    // library for a while actually gets noticed (addFoldersToLibrary's own
+    // check only ever sees genuinely new folders). Gating it behind "deep"
+    // keeps every ordinary launch-time/background rescan exactly as fast as
+    // it already was; a deliberate manual rescan is the one place a user is
+    // already expecting extra work to happen.
+    if (deep) {
+      maybeOfferAaxDecrypt(scanFolders).catch((err) => console.error('[audible] offer-decrypt check failed:', err));
+    }
   }
 }
 
@@ -1236,9 +1418,21 @@ function addFoldersToLibrary(paths) {
 
   const state = libraryStore.get();
   const before = state.folders.length;
+  // Only genuinely new directories are ever checked for undecrypted Audible
+  // files below — a folder already in the library is never re-offered
+  // decryption for files it was already asked (and possibly said "not now")
+  // about, so this can't turn into a repeated nag on every add/rescan.
+  const newDirs = dirs.filter((d) => !state.folders.includes(d));
   const folders = [...new Set([...state.folders, ...dirs])];
   libraryStore.set({ ...state, folders });
-  if (folders.length > before) runScan();
+  if (folders.length > before) {
+    // Not awaited — addFoldersToLibrary's own callers already treat the scan
+    // it triggers as fire-and-forget (the real result arrives via the async
+    // 'library:changed' push), so the batch-decrypt offer joins that same
+    // flow rather than delaying this function's synchronous return on a
+    // native dialog the user might not answer right away.
+    maybeOfferAaxDecrypt(newDirs).finally(() => runScan());
+  }
   return folders.length - before;
 }
 
@@ -1756,6 +1950,17 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle('audible:getActivationBytes', () => activationStore.get().activationBytes);
+
+  ipcMain.handle('audible:setActivationBytes', (_event, value) => {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed && !audible.isValidActivationBytes(trimmed)) {
+      return { ok: false, error: 'Activation bytes must be exactly 8 hex characters (0-9, A-F).' };
+    }
+    activationStore.set({ activationBytes: trimmed || null });
+    return { ok: true };
+  });
+
   /** Lightweight book shape for the duplicates view — not the full toClientBook (no chapters needed). */
   function toDupeSummary(book) {
     return {
@@ -2088,6 +2293,7 @@ app.whenReady().then(async () => {
     // session would silently overwrite ebook-pairings.json's prior contents,
     // including any manual picks, with data computed from that empty view.
     pairingStore.load(), activityStore.load(),
+    activationStore.load(), audibleStore.load(), aaxOfferedStore.load(),
   ]);
   {
     const state = libraryStore.get();
@@ -2171,6 +2377,9 @@ app.on('before-quit', (event) => {
   metadataStore.flushSync();
   pairingStore.flushSync();
   activityStore.flushSync();
+  activationStore.flushSync();
+  audibleStore.flushSync();
+  aaxOfferedStore.flushSync();
   // Best-effort, not awaited — the RPC pipe closing when this process exits
   // cleans up on Discord's side regardless, so this isn't worth delaying quit for.
   discord.shutdown();

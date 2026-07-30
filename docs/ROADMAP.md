@@ -146,6 +146,47 @@ Already shipped, so it is not repeated in the lists below:
   can't terminate the app. Also added `diagnostic.log` for crash/hang
   forensics. Shipped 2026-07-25.
 
+- **Delete / remove library entries** — two per-book actions, available both
+  in the book detail view and via right-click on a library card: **Remove
+  from library** (drops the book's data only, files untouched) and **Delete
+  book (files too)** (also trashes its files). Both fully purge every
+  per-book record tied to that id — progress, bookmarks, normalization,
+  online-metadata override, ebook pairing, and transcript — so nothing
+  orphaned lingers behind, unlike the existing duplicate-removal path (which
+  deliberately leaves those alone, since a sibling copy under the same id
+  namespace might still need them).
+
+  File deletion always goes through the Recycle Bin, never a permanent
+  delete. What gets trashed depends on whether this book exclusively owns
+  its containing folder — checked against the whole library (`dirCounts`,
+  the same check `reorganize.js` already uses), not assumed from the book
+  alone: if so, the whole folder goes in one shot, sweeping up any leftover
+  cover art or notes that a file-by-file approach would otherwise leave
+  behind and treat as "something else is still here"; if the folder is
+  shared with sibling books (confirmed real in this library: a "Radio and
+  Podcast Production" folder holds four separate single-file books side by
+  side), only this book's own track files are touched, and the folder is
+  removed afterward only if it ends up completely empty. A paired
+  read-along ebook living inside the book's own folder is trashed
+  alongside it either way; one picked from elsewhere on disk (the ebook
+  picker can point anywhere) is never trashed — only its pairing record is
+  dropped.
+
+  *Tested:* real, disk-touching verification rather than mocks throughout —
+  a real audio fixture actually moved to the Recycle Bin and confirmed gone
+  from its original path; all five per-book stores purged and reread from
+  disk (not just memory) to confirm the target book's entries are gone
+  while an unrelated book's survive untouched; the exclusive-vs-shared
+  folder split confirmed against real directories (solo book → folder
+  removed; shared folder → sibling's file and the folder itself survive;
+  leftover unrelated file → folder survives); and the co-located-vs-external
+  ebook split confirmed the same way, including that a book exclusively
+  owning its folder still leaves an external ebook alone even though the
+  whole audio folder gets trashed. The right-click context menu itself was
+  verified end-to-end against a real rendered grid: opens positioned at the
+  cursor, dismisses on outside-click/Escape, and sends the correct book id
+  and files-or-not flag through the same deletion path. Shipped 2026-07-29.
+
 Known gaps carried forward as motivation: series volumes can share a display
 title, box sets stay whole, and merged `.m4b` parts collapse to one chapter each.
 
@@ -693,11 +734,105 @@ once the type is known, and pairs with the existing Has-ebook filter.
 Worth doing before sidecar metadata (#2): both touch how a book's identity is
 derived, and getting parts merged first means less to redo.
 
-### 7. Audible `.aax` / `.aaxc` support — **L**
-Decrypt owned Audible files with the user's activation bytes (the Libation
-approach) so an Audible library plays natively. Legally sensitive and heavier;
-list it, gate it behind explicit user-supplied credentials, and treat as a later,
-optional module.
+### 7. Audible `.aax` support — **shipped** ✅ (AAX only, not AAXC)
+**File → Decrypt Audible file (.aax)…** picks one `.aax` via a native file
+dialog and decrypts it into a `.m4b` alongside it, via ffmpeg's own
+long-public `-activation_bytes` option — stream-copied (`-c copy`), so this
+runs at disk speed, not encode speed. The source `.aax` is never touched,
+moved, or deleted; the result gets added to the library the normal way
+(**Folders → Add folder**, or picked up by the next scan if it already sits
+under one) — no changes needed anywhere in the scanner, database, or
+player. Activation bytes are entered once via **File → Set Audible
+activation bytes…**, stored locally, and used only as that one ffmpeg
+argument — this app never talks to Audible's servers or handles Audible
+account credentials itself; the user supplies bytes obtained through their
+own means. A book decrypted this way gets a small "AUDIBLE" card badge
+(bottom-left corner, the one badge position left free), driven by a
+tiny `audible-sources.json` store written at the moment decryption
+finishes.
+
+Deliberately scoped to **AAX only**, not AAXC (the current Audible app's
+format) — the roadmap's own "activation bytes" framing is specifically the
+AAX mechanism; AAXC uses a per-book key+IV pair from a companion voucher
+file instead, a different enough mechanism to be its own future item rather
+than silently folded into this one.
+
+**Also offered automatically when a folder is newly added** (Folders → Add
+folder, or drag-and-drop) — a real user report ("my test book doesn't show
+up even in drag and drop") surfaced that dropping a folder containing only
+`.aax` files did nothing, with zero explanation, since `.aax` is
+deliberately not a recognized audio extension. Rather than either fully
+automatic decryption during every scan (rejected: wrong activation bytes
+fail *silently* — ffmpeg exits 0 but writes a corrupt file — so unattended
+decryption of a whole library in one pass is exactly the wrong place to
+remove the one confirmation step that catches that mistake early; it would
+also turn scanning from a fast, mostly-read-only operation into one that
+writes new files as a side effect) or leaving it fully manual, a folder that
+is genuinely new to the library is checked for `.aax` files lacking an
+already-decrypted `.m4b` sibling, and — only if any are found — a single
+native confirm offers to decrypt all of them right then.
+
+**First version of this had a real gap, caught by hands-on testing against a
+real file**: it only ever checked *newly-added* folders, so a `.aax` dropped
+into a folder that had been part of the library for a while (the actual
+situation in the bug report, confirmed with a direct `library.db` query —
+both `E:\Books` and `E:\Books\xtestx` already tracked) was never checked at
+all. Fixed by also running the check on an explicit **File → Rescan
+library** — deliberately *not* on routine/automatic scans (app launch,
+background rescans), which stay exactly as fast as before — covering the
+"dropped a new file into an existing folder" case a new-folder-only check
+structurally can't. A small `audible-offered.json` store (`{ [aaxPath]:
+true }`) records every file either check has ever asked about, regardless
+of the answer, so a file is never offered twice no matter which of the two
+entry points found it, and declining still doesn't turn into a nag on a
+later rescan.
+
+Explicit account login (the fuller "Libation approach" the original roadmap
+wording gestured at) was considered and deliberately **not** built: it would
+mean this app itself speaking Audible's private, undocumented
+device-registration API and storing the user's actual Audible account
+password rather than a small revocable derived value — a materially
+different risk category from applying activation bytes obtained through the
+user's own separate means, and out of scope here.
+
+*Tested, with one real limitation stated plainly:* every other feature this
+session was verified against a real fixture; this one couldn't be, fully —
+there's no legitimately obtainable `.aax` file to test against, and AAX
+encryption isn't something that can be synthesized the way this project's
+`.m4b`/`.mp3` test fixtures have been all along. What *was* verified
+directly: the ffmpeg spawn itself (binary resolution, argument
+construction, exit-code handling, the concurrent-job guard) against a real
+audio file stream-copied through the exact same invocation a real decrypt
+would use; activation-bytes format validation (8 hex chars, case-insensitive,
+rejects short/non-hex/empty); that ffmpeg does not echo the activation
+bytes value back in its own stderr output (checked directly, not assumed,
+before deciding no redaction was needed there); the newly-added-folder
+`.aax` walker (finds an undecrypted file, skips one with an existing `.m4b`
+sibling, recurses into subfolders, never descends into a skip-listed
+directory like `$RECYCLE.BIN`, checks multiple directories correctly); and
+— the one genuinely tricky correctness risk in this feature — that the book
+id predicted from the output path at decrypt-time (so the badge can appear
+correctly the very first time the file is scanned, without waiting on a
+second scan) exactly matches the id `scanLibrary()` itself computes for
+that same file, confirmed by actually running a real scan and comparing.
+The activation-bytes modal (open, prefill masked by default with a
+Show/Hide toggle that always re-masks on reopen, validation error, save,
+Escape/backdrop dismiss) and the card
+badge's rendering were both confirmed against a real running instance too.
+The one thing that can only be proven by an actual user running it against
+a real file with their real activation bytes is the decryption itself.
+
+**A real gap in that testing, caught by the user, not found first:** every
+check above ran against the dev Electron binary, where `app.asar` doesn't
+exist and the `app.asar` → `app.asar.unpacked` ffmpeg-path rewrite this
+feature depends on (same pattern the whisper/transcribe feature already
+needed) is a silent no-op — so none of it had actually exercised that
+rewrite at all. Once flagged, verified directly against the real packaged
+build: required `audible.js` from inside the real `app.asar` and confirmed
+it still resolves and successfully spawns the real unpacked `ffmpeg.exe`
+from there. The user's own manual single-file decrypt against a real
+Audible file, run after that, is what actually confirmed decryption itself
+works end to end.
 
 ---
 
