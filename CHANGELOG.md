@@ -7,6 +7,35 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+
+## [0.16.0] - 2026-07-31
+### Added
+- **Delete and remove library entries** — two new per-book actions, in the
+  book detail view and via right-click on any library card: **Remove from
+  library** (drops it from Midnight Athenaeum, files untouched) and **Delete
+  book (files too)** (also sends its files to the Recycle Bin — never a
+  permanent delete). Deleting also clears out that book's progress,
+  bookmarks, normalization, online-metadata override, ebook pairing, and
+  transcript, so nothing orphaned is left behind. If a book's folder ends up
+  completely empty afterward (and only then — a folder shared with other
+  books is never touched), the empty folder is removed too.
+- **Audible `.aax` decryption** — **File → Decrypt Audible file (.aax)…**
+  decrypts one of your own `.aax` files into a plain `.m4b` right alongside
+  it, using your own Audible activation bytes (entered once via **File →
+  Set Audible activation bytes…**, stored locally, used only to decrypt —
+  never sent anywhere). The original `.aax` is never touched. Adding a
+  folder that contains undecrypted Audible files — or running **File →
+  Rescan library** on one already in your library — now also offers to
+  decrypt all of them at once. A decrypted book shows a small "AUDIBLE"
+  badge on its card.
+
+### Fixed
+- Library covers could flicker back to a broken-looking state while
+  scrolling quickly through a large library, or while a background scan was
+  still filling in details — most visible on a big scrollbar drag. Covers
+  now load smoothly and consistently regardless of how you're scrolling or
+  what's happening in the background.
+
 ### Changed
 - Updated the underlying Electron runtime from 34 to 43, which brings a
   newer Chromium and closes 18 security advisories against the old version —
