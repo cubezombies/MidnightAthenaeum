@@ -8,6 +8,15 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-08-06
+### Security
+- Patched four dependency-reported advisories: three in `undici` (used by
+  the Discord Rich Presence integration) and one high-severity advisory in
+  `fast-uri` (used by the packaging toolchain's schema validation). Both are
+  transitive dependencies, pinned to their patched versions without
+  disturbing Electron's own separately-resolved, already-current copy of
+  `undici`. No functional or behavioral changes.
+
 ## [0.16.0] - 2026-07-31
 ### Added
 - **Delete and remove library entries** — two new per-book actions, in the
