@@ -8,6 +8,12 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-08-06
+### Security
+- Patched a high-severity advisory in `js-yaml` (used by the packaging
+  toolchain), pinned to its patched version. No functional or behavioral
+  changes.
+
 ## [0.16.1] - 2026-08-06
 ### Security
 - Patched four dependency-reported advisories: three in `undici` (used by
