@@ -8,6 +8,13 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-09-11
+### Security
+- Patched twelve dependency-reported advisories: seven in `@xmldom/xmldom`
+  (used by the packaging toolchain's plist handling) and five in `fast-uri`
+  superseding the previous pin (both build-time only). No functional or
+  behavioral changes.
+
 ## [0.16.2] - 2026-08-06
 ### Security
 - Patched a high-severity advisory in `js-yaml` (used by the packaging
