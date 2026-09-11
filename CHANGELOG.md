@@ -8,6 +8,12 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.16.4] - 2026-09-11
+### Security
+- Patched a high-severity `js-yaml` advisory (used by the packaging
+  toolchain) that GitHub surfaced right after v0.16.3 published, pinned to
+  its patched version. No functional or behavioral changes.
+
 ## [0.16.3] - 2026-09-11
 ### Security
 - Patched twelve dependency-reported advisories: seven in `@xmldom/xmldom`
