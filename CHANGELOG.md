@@ -8,6 +8,16 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-11
+### Added
+- **Gapless multi-track playback** — crossing from one file to the next in a
+  multi-track (mp3-folder) book no longer has a brief stall while the next
+  file loads. A second, hidden `<audio>` element quietly preloads the
+  upcoming track well ahead of the boundary; the moment the current one ends,
+  playback hands straight off to the already-buffered element instead of
+  starting a fresh load. Manual chapter jumps and seek-bar scrubbing are
+  unaffected — they still load on demand, same as before.
+
 ## [0.16.4] - 2026-09-11
 ### Security
 - Patched a high-severity `js-yaml` advisory (used by the packaging

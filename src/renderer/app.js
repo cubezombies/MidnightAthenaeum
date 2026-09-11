@@ -1828,53 +1828,94 @@ const VOICE_PRESENCE_GAIN_DB = 8;   // bumped from 6 -- the highpass alone is su
                                      // speakers (they already roll off near 100Hz), so the
                                      // presence lift is the lever that needs to be unmistakable
 
-let audioGraph = null;
+let audioGraph = null;        // graph for the currently active el.audio
+let shadowGraph = null;       // graph for the shadow (preloading) element, once one exists
 let audioGraphFailed = false;
+let sharedCtx = null;         // one AudioContext for both elements
+
+// Gapless multi-track playback: a second real <audio> element, created
+// lazily the first time it's needed, that preloads the next file ahead of
+// the current track's boundary (see primeNextTrack/promoteShadow below).
+// `el.audio` always refers to whichever element is currently the audible,
+// active one; `shadowEl` is the other one, either idle or silently buffered
+// on deck for the next track.
+let shadowEl = null;
+let primedForUrl = null; // the track URL currently buffered into shadowEl, or null
 
 /**
- * Build the audio graph once (a media element can only be sourced once):
+ * Build one element's audio graph (a media element can only be sourced once):
  *   source -> analyser -> normGain -> voiceHighpass -> voicePresence -> volumeGain -> destination
  * The analyser taps before any gain/EQ so loudness is measured raw; the user's
- * volume is applied on el.audio (before the source tap) and compensated for when
- * reading levels, so skip-silence and normalization are volume- and EQ-independent.
+ * volume is applied on the element (before the source tap) and compensated for
+ * when reading levels, so skip-silence and normalization are volume- and
+ * EQ-independent. Used for both the active element and the shadow element
+ * that gapless playback (see primeNextTrack/promoteShadow) preloads the next
+ * track into — each gets its own full chain, both feeding the same
+ * destination, so whichever becomes active already sounds right the instant
+ * it starts rather than popping to default EQ/gain.
  */
+function buildGraph(ctx, element) {
+  const source = ctx.createMediaElementSource(element);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  const normGain = ctx.createGain();
+  const voiceHighpass = ctx.createBiquadFilter();
+  voiceHighpass.type = 'highpass';
+  const voicePresence = ctx.createBiquadFilter();
+  voicePresence.type = 'peaking';
+  voicePresence.frequency.value = VOICE_PRESENCE_HZ;
+  voicePresence.Q.value = VOICE_PRESENCE_Q;
+  const volumeGain = ctx.createGain();
+  source.connect(analyser);
+  analyser.connect(normGain);
+  normGain.connect(voiceHighpass);
+  voiceHighpass.connect(voicePresence);
+  voicePresence.connect(volumeGain);
+  volumeGain.connect(ctx.destination);
+  const graph = {
+    ctx, analyser, normGain, voiceHighpass, voicePresence, volumeGain,
+    buf: new Float32Array(analyser.fftSize),
+  };
+  // Match whatever the active graph is currently at (locked/mid-measurement
+  // norm gain, current voice-boost state) rather than defaulting to flat, so
+  // a freshly-built shadow graph doesn't pop when it's promoted to active.
+  volumeGain.gain.value = Math.max(0, Math.min(1, state.userVolume * state.sleep.fadeGain));
+  voiceHighpass.frequency.value = state.voiceBoost ? VOICE_HIGHPASS_ON_HZ : VOICE_HIGHPASS_OFF_HZ;
+  voicePresence.gain.value = state.voiceBoost ? VOICE_PRESENCE_GAIN_DB : 0;
+  normGain.gain.value = audioGraph ? audioGraph.normGain.gain.value : 1;
+  return graph;
+}
+
 function ensureAudioGraph() {
   if (audioGraph || audioGraphFailed) return audioGraph;
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = ctx.createMediaElementSource(el.audio);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 1024;
-    const normGain = ctx.createGain();
-    const voiceHighpass = ctx.createBiquadFilter();
-    voiceHighpass.type = 'highpass';
-    const voicePresence = ctx.createBiquadFilter();
-    voicePresence.type = 'peaking';
-    voicePresence.frequency.value = VOICE_PRESENCE_HZ;
-    voicePresence.Q.value = VOICE_PRESENCE_Q;
-    const volumeGain = ctx.createGain();
-    source.connect(analyser);
-    analyser.connect(normGain);
-    normGain.connect(voiceHighpass);
-    voiceHighpass.connect(voicePresence);
-    voicePresence.connect(volumeGain);
-    volumeGain.connect(ctx.destination);
-    audioGraph = {
-      ctx, analyser, normGain, voiceHighpass, voicePresence, volumeGain,
-      buf: new Float32Array(analyser.fftSize),
-    };
+    sharedCtx = sharedCtx || new (window.AudioContext || window.webkitAudioContext)();
+    audioGraph = buildGraph(sharedCtx, el.audio);
     // Volume now lives in the graph (after the analyser), so the analyser always
     // sees the raw full-scale signal — measurement and silence detection are
     // volume-independent. The element's own volume is pinned to 1.
-    volumeGain.gain.value = Math.max(0, Math.min(1, state.userVolume * state.sleep.fadeGain));
     el.audio.volume = 1;
-    voiceHighpass.frequency.value = state.voiceBoost ? VOICE_HIGHPASS_ON_HZ : VOICE_HIGHPASS_OFF_HZ;
-    voicePresence.gain.value = state.voiceBoost ? VOICE_PRESENCE_GAIN_DB : 0;
   } catch (err) {
     console.error('[audio] graph init failed:', err);
     audioGraphFailed = true;
   }
   return audioGraph;
+}
+
+/** Same as ensureAudioGraph, for the shadow element — only meaningful once one exists. */
+function ensureShadowGraph() {
+  if (!shadowEl || shadowGraph || audioGraphFailed || !sharedCtx) return shadowGraph;
+  try {
+    shadowGraph = buildGraph(sharedCtx, shadowEl);
+    shadowEl.volume = 1;
+  } catch (err) {
+    console.error('[audio] shadow graph init failed:', err);
+  }
+  return shadowGraph;
+}
+
+function allGraphs() {
+  return [audioGraph, shadowGraph].filter(Boolean);
 }
 
 /** Raw source-level RMS and peak (the analyser taps before any gain). */
@@ -1896,14 +1937,20 @@ function setSilenceBoost(on) {
   el.skipSilenceBtn.classList.toggle('skipping', on);
 }
 
-/** Smoothly move the normalization gain to `gain` over `ramp` seconds. */
+/**
+ * Smoothly move the normalization gain to `gain` over `ramp` seconds, on
+ * every graph that currently exists — including the shadow element's, if
+ * one's been primed, so it's already at the right gain if/when it gets
+ * promoted mid-ramp rather than snapping to it.
+ */
 function setNormGain(gain, ramp = 0.4) {
-  if (!audioGraph) return;
-  const p = audioGraph.normGain.gain;
-  const t = audioGraph.ctx.currentTime;
-  p.cancelScheduledValues(t);
-  p.setValueAtTime(p.value, t);
-  p.linearRampToValueAtTime(gain, t + ramp);
+  for (const g of allGraphs()) {
+    const p = g.normGain.gain;
+    const t = g.ctx.currentTime;
+    p.cancelScheduledValues(t);
+    p.setValueAtTime(p.value, t);
+    p.linearRampToValueAtTime(gain, t + ramp);
+  }
 }
 
 function computeNormGain(m) {
@@ -2011,12 +2058,21 @@ function setNormalize(on) {
   }
 }
 
-/** Smoothly ramp a filter's AudioParam to `value` over `ramp` seconds — same pattern as setNormGain. */
-function rampParam(param, value, ramp = 0.3) {
-  const t = audioGraph.ctx.currentTime;
-  param.cancelScheduledValues(t);
-  param.setValueAtTime(param.value, t);
-  param.linearRampToValueAtTime(value, t + ramp);
+/**
+ * Smoothly ramp an AudioParam to `value` over `ramp` seconds, on every graph
+ * that currently exists — `select` picks the right node out of each graph
+ * (e.g. `(g) => g.voiceHighpass.frequency`), same broadcast reasoning as
+ * setNormGain: the shadow element's graph, if any, should track the same
+ * settings the active one has.
+ */
+function rampParam(select, value, ramp = 0.3) {
+  for (const g of allGraphs()) {
+    const param = select(g);
+    const t = g.ctx.currentTime;
+    param.cancelScheduledValues(t);
+    param.setValueAtTime(param.value, t);
+    param.linearRampToValueAtTime(value, t + ramp);
+  }
 }
 
 /** Turn the Voice Boost EQ (highpass + presence lift) on/off. */
@@ -2027,8 +2083,8 @@ function setVoiceBoost(on) {
   const g = ensureAudioGraph();
   if (!g) return;
   if (g.ctx.state === 'suspended') g.ctx.resume();
-  rampParam(g.voiceHighpass.frequency, on ? VOICE_HIGHPASS_ON_HZ : VOICE_HIGHPASS_OFF_HZ);
-  rampParam(g.voicePresence.gain, on ? VOICE_PRESENCE_GAIN_DB : 0);
+  rampParam((gr) => gr.voiceHighpass.frequency, on ? VOICE_HIGHPASS_ON_HZ : VOICE_HIGHPASS_OFF_HZ);
+  rampParam((gr) => gr.voicePresence.gain, on ? VOICE_PRESENCE_GAIN_DB : 0);
 }
 
 /** Sends the current playback snapshot to Discord Rich Presence, if enabled. */
@@ -2082,6 +2138,7 @@ function seekTo(globalSeconds, { autoplay = null } = {}) {
 
   if (index !== state.trackIndex) {
     state.trackIndex = index;
+    primeNextTrack(book, index);
     // Read at fire time, so a second seek landing on the same loading track wins.
     state.pendingSeek = local;
     el.audio.src = track.url;
@@ -2098,6 +2155,76 @@ function seekTo(globalSeconds, { autoplay = null } = {}) {
   }
 
   updateTimeUI();
+}
+
+/**
+ * Buffers the next track's file into the idle shadow element ahead of the
+ * boundary. What actually stalls a cold track switch isn't disk I/O (these
+ * are local files, and fast) but each <audio> element's own demuxer/decoder
+ * pipeline startup — so the fix is a second, already-warm element ready to
+ * take over outright (see promoteShadow), not just a network/cache prefetch
+ * on the same element.
+ */
+function primeNextTrack(book, index) {
+  const next = book.tracks[index + 1];
+  if (!next || primedForUrl === next.url) return;
+
+  if (!shadowEl) {
+    shadowEl = document.createElement('audio');
+    shadowEl.preload = 'auto';
+    shadowEl.crossOrigin = 'anonymous';
+    shadowEl.preservesPitch = true;
+    shadowEl.style.display = 'none';
+    document.body.appendChild(shadowEl);
+    attachPlaybackListeners(shadowEl);
+  }
+
+  primedForUrl = next.url;
+  shadowEl.pause();
+  shadowEl.defaultPlaybackRate = state.baseSpeed;
+  shadowEl.src = next.url;
+  shadowEl.load();
+  if (audioGraph) ensureShadowGraph();
+}
+
+/**
+ * Hands playback straight to the shadow element when it's already primed for
+ * exactly `book.tracks[index]` — a same-tick swap with no fresh load, which
+ * is what makes the boundary gapless. Returns false (nothing changed) if the
+ * shadow isn't ready for this exact track, e.g. after a seek/chapter-jump
+ * that skipped past the one it had buffered — the caller falls back to the
+ * normal (cold) seekTo() path in that case, same as before this existed.
+ */
+function promoteShadow(book, index) {
+  const track = book.tracks[index];
+  if (!shadowEl || primedForUrl !== track.url || shadowEl.readyState < 2) return false;
+
+  const prevActive = el.audio;
+  const prevGraph = audioGraph;
+  el.audio = shadowEl;
+  audioGraph = shadowGraph;
+  shadowEl = prevActive;
+  shadowGraph = prevGraph;
+  primedForUrl = null;
+
+  state.trackIndex = index;
+  state.pausedAt = 0;
+  state.silenceBoosting = false;
+  el.audio.currentTime = 0;
+  ensureAudioGraph(); // self-heals if a feature was toggled on after this element was primed
+  applyVolume();
+  el.audio.defaultPlaybackRate = state.baseSpeed;
+  el.audio.playbackRate = state.baseSpeed;
+  el.audio.play().catch(() => {});
+
+  // Demote the old (just-finished) element back to a clean, idle shadow slot.
+  shadowEl.pause();
+  shadowEl.removeAttribute('src');
+  shadowEl.load();
+
+  primeNextTrack(book, index);
+  updateTimeUI();
+  return true;
 }
 
 function updateTimeUI() {
@@ -2208,11 +2335,13 @@ function flushProgress() {
 function applyVolume() {
   const v = Math.max(0, Math.min(1, state.userVolume * state.sleep.fadeGain));
   if (audioGraph) {
-    // Volume is a graph node once routed; keep the element at unity.
-    audioGraph.volumeGain.gain.setTargetAtTime(v, audioGraph.ctx.currentTime, 0.015);
+    // Volume is a graph node once routed; keep the element(s) at unity.
+    for (const g of allGraphs()) g.volumeGain.gain.setTargetAtTime(v, g.ctx.currentTime, 0.015);
     el.audio.volume = 1;
+    if (shadowEl) shadowEl.volume = 1;
   } else {
     el.audio.volume = v;
+    if (shadowEl) shadowEl.volume = v;
   }
 }
 
@@ -2374,87 +2503,120 @@ function togglePlayPause() {
 
 el.playBtn.addEventListener('click', togglePlayPause);
 
-el.audio.addEventListener('play', () => {
-  el.playIcon.setAttribute('href', '#icon-pause');
-  el.playBtn.setAttribute('aria-label', 'Pause');
-  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
-  window.api.setPlayingState(true);
-  pushDiscordActivity();
+/**
+ * Wires the five playback-state listeners this app cares about onto one
+ * <audio> element. Called for the primary element below, and again, lazily,
+ * for the shadow element the first time gapless priming creates one (see
+ * primeNextTrack) — both elements carry the same listeners so whichever one
+ * ends up as `el.audio` after a promotion (see promoteShadow) just keeps
+ * working, with nothing to re-wire. Each callback bails unless it fired on
+ * whichever element `el.audio` currently points to, so events from the
+ * other (idle/preloading) element never reach this app's playback-state
+ * logic.
+ */
+function attachPlaybackListeners(element) {
+  element.addEventListener('play', (e) => {
+    if (e.currentTarget !== el.audio) return;
+    el.playIcon.setAttribute('href', '#icon-pause');
+    el.playBtn.setAttribute('aria-label', 'Pause');
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
+    window.api.setPlayingState(true);
+    pushDiscordActivity();
 
-  // A Web Audio graph can only be built during/after a user gesture; first play
-  // is our chance. Resume it too — the context suspends when idle. Must check
-  // every feature that routes through the graph: missing one here means audio
-  // can go completely silent (not just "wrong EQ") whenever the context has
-  // suspended and this was the only enabled feature to leave it that way.
-  if (state.skipSilence || state.normalize || state.voiceBoost) {
-    const g = ensureAudioGraph();
-    if (g && g.ctx.state === 'suspended') g.ctx.resume();
-  }
+    // A Web Audio graph can only be built during/after a user gesture; first play
+    // is our chance. Resume it too — the context suspends when idle. Must check
+    // every feature that routes through the graph: missing one here means audio
+    // can go completely silent (not just "wrong EQ") whenever the context has
+    // suspended and this was the only enabled feature to leave it that way.
+    if (state.skipSilence || state.normalize || state.voiceBoost) {
+      const g = ensureAudioGraph();
+      if (g && g.ctx.state === 'suspended') g.ctx.resume();
+    }
 
-  if (state.sleep.firedPaused) {
-    // Resuming after the sleep timer stopped us: rewind a fixed amount so you
-    // don't wake up having missed the last thing you heard.
-    state.sleep.firedPaused = false;
-    seekTo(globalTime() - SLEEP_REWIND_SEC);
-  } else if (state.pausedAt) {
-    // Rewind a little on resume, scaled to how long you were away.
-    const rewind = resumeRewindSeconds(Date.now() - state.pausedAt);
-    if (rewind > 0) seekTo(globalTime() - rewind);
-  }
-  state.pausedAt = 0;
-});
-
-el.audio.addEventListener('pause', () => {
-  el.playIcon.setAttribute('href', '#icon-play');
-  el.playBtn.setAttribute('aria-label', 'Play');
-  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
-  window.api.setPlayingState(false);
-  pushDiscordActivity();
-  state.pausedAt = Date.now();
-  flushProgress();
-});
-el.audio.addEventListener('timeupdate', updateTimeUI);
-
-// A track ending mid-book just means the next file starts; only the last one
-// is really "the end".
-el.audio.addEventListener('ended', () => {
-  const book = state.playing;
-  if (book && state.trackIndex < book.tracks.length - 1) {
-    const next = book.tracks[state.trackIndex + 1];
-    seekTo(next.offset, { autoplay: true });
-    return;
-  }
-  flushProgress();
-  renderLibrary();
-});
-// A failed load fires 'error' instead of 'loadedmetadata' — and playback in
-// seekTo() is entirely gated on 'loadedmetadata', so without this the player
-// just sits there silently on a bad file: the click visibly does nothing,
-// with no indication why short of opening DevTools.
-el.audio.addEventListener('error', () => {
-  const err = el.audio.error;
-  if (!err) return;
-  console.error(`audio error (code ${err.code}):`, err.message);
-  // Mirror it into diagnostic.log alongside what the media protocol did.
-  // On its own "SRC_NOT_SUPPORTED" says nothing about *why* — pairing it
-  // with the protocol's side (403/404/served) is what makes it diagnosable.
-  const codeNames = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
-  window.api.reportMediaError?.({
-    code: err.code,
-    codeName: codeNames[err.code] ?? String(err.code),
-    message: err.message,
-    src: el.audio.currentSrc || el.audio.src || null,
-    title: state.playing?.title ?? null,
+    if (state.sleep.firedPaused) {
+      // Resuming after the sleep timer stopped us: rewind a fixed amount so you
+      // don't wake up having missed the last thing you heard.
+      state.sleep.firedPaused = false;
+      seekTo(globalTime() - SLEEP_REWIND_SEC);
+    } else if (state.pausedAt) {
+      // Rewind a little on resume, scaled to how long you were away.
+      const rewind = resumeRewindSeconds(Date.now() - state.pausedAt);
+      if (rewind > 0) seekTo(globalTime() - rewind);
+    }
+    state.pausedAt = 0;
   });
-  if (state.playing) {
-    const reason = err.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
-      ? 'unsupported or corrupted file'
-      : err.code === MediaError.MEDIA_ERR_DECODE
-        ? 'the file could not be decoded'
-        : 'could not load the file';
-    showToast(`Couldn't play "${state.playing.title}" — ${reason}.`);
-  }
-});
+
+  element.addEventListener('pause', (e) => {
+    if (e.currentTarget !== el.audio) return;
+    el.playIcon.setAttribute('href', '#icon-play');
+    el.playBtn.setAttribute('aria-label', 'Play');
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
+    window.api.setPlayingState(false);
+    pushDiscordActivity();
+    state.pausedAt = Date.now();
+    flushProgress();
+  });
+
+  element.addEventListener('timeupdate', (e) => {
+    if (e.currentTarget === el.audio) updateTimeUI();
+  });
+
+  // A track ending mid-book just means the next file starts; only the last
+  // one is really "the end". If the next track is already primed in the
+  // shadow element, hand off to it directly (promoteShadow) instead of
+  // loading fresh — that's what makes the boundary gapless.
+  element.addEventListener('ended', (e) => {
+    if (e.currentTarget !== el.audio) return;
+    const book = state.playing;
+    if (book && state.trackIndex < book.tracks.length - 1) {
+      const nextIndex = state.trackIndex + 1;
+      if (!promoteShadow(book, nextIndex)) {
+        seekTo(book.tracks[nextIndex].offset, { autoplay: true });
+      }
+      return;
+    }
+    flushProgress();
+    renderLibrary();
+  });
+
+  // A failed load fires 'error' instead of 'loadedmetadata' — and playback in
+  // seekTo() is entirely gated on 'loadedmetadata', so without this the player
+  // just sits there silently on a bad file: the click visibly does nothing,
+  // with no indication why short of opening DevTools.
+  element.addEventListener('error', (e) => {
+    if (e.currentTarget !== el.audio) {
+      // The shadow element failed while priming ahead of time — drop the
+      // stale prime so the boundary falls back to a normal (cold) load
+      // instead of promoting a broken element.
+      if (e.currentTarget === shadowEl) primedForUrl = null;
+      return;
+    }
+    const err = el.audio.error;
+    if (!err) return;
+    console.error(`audio error (code ${err.code}):`, err.message);
+    // Mirror it into diagnostic.log alongside what the media protocol did.
+    // On its own "SRC_NOT_SUPPORTED" says nothing about *why* — pairing it
+    // with the protocol's side (403/404/served) is what makes it diagnosable.
+    const codeNames = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+    window.api.reportMediaError?.({
+      code: err.code,
+      codeName: codeNames[err.code] ?? String(err.code),
+      message: err.message,
+      src: el.audio.currentSrc || el.audio.src || null,
+      title: state.playing?.title ?? null,
+    });
+    if (state.playing) {
+      const reason = err.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED
+        ? 'unsupported or corrupted file'
+        : err.code === MediaError.MEDIA_ERR_DECODE
+          ? 'the file could not be decoded'
+          : 'could not load the file';
+      showToast(`Couldn't play "${state.playing.title}" — ${reason}.`);
+    }
+  });
+}
+
+attachPlaybackListeners(el.audio);
 
 // Persist every 5s while playing so a hard crash loses very little.
 setInterval(() => { if (!el.audio.paused) flushProgress(); }, 5000);

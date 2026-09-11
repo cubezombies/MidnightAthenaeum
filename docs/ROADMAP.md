@@ -690,11 +690,18 @@ Many mp3-folder books have no real chapters. Detect long silences to synthesize
 chapter breaks, or (better) reuse the Whisper transcript to place semantically
 sensible marks. Shares the silence-detection engine with skip-silence.
 
-### 4. Gapless multi-track playback — **S/M**
-At file boundaries in a multi-track book there can be a tiny stall while the next
-`ab-media://` source loads. Preload/prime the next track's element (double-buffer
-two `<audio>` nodes and cross-hand at the boundary) for seamless rollover. Purely
-a `seekTo`/`ended` refinement in `app.js`.
+### 4. Gapless multi-track playback — **shipped** ✅
+A second `<audio>` element (`shadowEl` in `app.js`) preloads the next track ahead
+of the boundary — buffered to `readyState` 4 well before the current one ends —
+and a natural `ended` event hands playback straight to it instead of loading
+fresh on the same element. That per-element demuxer/decoder pipeline startup,
+not disk I/O, turned out to be what actually caused the stall: `ab-media://`
+responses carry no `Cache-Control` header, so a same-element reload always paid
+that cost regardless of OS-level file caching — only a second, already-warm
+element avoids it. Falls back to the original cold-load path for anything that
+isn't a primed natural boundary (chapter jump, seek-bar drag, scrubbing past the
+primed track). Verified against real generated audio crossing a track boundary —
+`currentTime` advances continuously with no freeze and no stall in the UI.
 
 ### 5. Per-chapter embedded artwork — **S**
 Some `.m4b` chapters carry their own images (`IChapter.image`). Surface them in
@@ -1169,8 +1176,8 @@ ordered by value against effort:
    library scan as split, mislabelled entries today. Touches how a book's
    identity is derived, so worth doing before sidecar metadata rather than
    after.
-5. **Gapless playback + per-chapter artwork** (Tier 3 #4–#5) — small, purely
-   playback polish, no architectural risk.
+5. **Per-chapter artwork** (Tier 3 #5) — small, purely playback polish, no
+   architectural risk. (Gapless playback, Tier 3 #4, shipped.)
 6. **Query-per-view** (Performance #1, the open half) — the real ceiling for
    very large libraries, and a prerequisite for instant server-side search.
    Bigger: it changes the app's interaction model, so it wants its own pass.
