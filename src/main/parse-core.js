@@ -130,6 +130,33 @@ async function generateCoverThumb(coverCache, id, sourcePath) {
   }
 }
 
+/**
+ * Same decode-via-nativeImage safety posture as generateCoverThumb (never
+ * trust an embedded image's bytes directly — this one came out of an mp4
+ * chapter-image track read by mp4-chapters.js's own magic-byte sniff, which
+ * is a cheap sanity check, not real validation), plus the same "small
+ * decorative thumbnail" sizing: chapter art is for the chapter list / now-
+ * playing view, not a full-size cover.
+ */
+async function cacheChapterImage(coverCache, bookId, chapterIndex, image) {
+  if (!image?.data?.length) return null;
+  const nativeImage = getNativeImage();
+  if (!nativeImage) return null;
+  try {
+    const img = nativeImage.createFromBuffer(image.data);
+    if (img.isEmpty()) return null;
+    const buf = img.resize({ width: THUMB_WIDTH, quality: 'good' }).toJPEG(THUMB_QUALITY);
+    if (!buf.length) return null;
+    const target = path.join(coverCache, `${bookId}-ch${chapterIndex}.jpg`);
+    await fsp.mkdir(coverCache, { recursive: true });
+    await fsp.writeFile(target, buf);
+    return target;
+  } catch (err) {
+    console.warn(`[parse-core] could not cache chapter image ${bookId}#${chapterIndex}: ${err.message}`);
+    return null;
+  }
+}
+
 /** Fall back to a cover image sitting next to the audio. */
 async function findFolderImage(dir) {
   let entries;
@@ -334,11 +361,20 @@ async function fillOneBookDetail({ book, coverCache }) {
       title: ch.title,
       start: ch.start,
       end: all[i + 1] ? all[i + 1].start : book.duration || null,
+      image: ch.image, // raw {data, ext} at this point — cached to a path just below
     }));
 
     if (chapters.length <= 1 && await hasSiblingCue(filePath)) {
       const cueChapters = await chaptersFromCue(filePath, book.duration);
       if (cueChapters.length > 1) chapters = cueChapters;
+    }
+
+    if (chapters.some((ch) => ch.image)) {
+      await Promise.all(chapters.map(async (ch, i) => {
+        if (!ch.image) return;
+        const cached = await cacheChapterImage(coverCache, book.id, i, ch.image);
+        if (cached) ch.image = cached; else delete ch.image;
+      }));
     }
 
     let cover = await cacheCoverFromPicture(coverCache, book.id, tags.common.picture?.[0]);

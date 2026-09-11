@@ -8,6 +8,17 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-11
+### Added
+- **Per-chapter artwork** — a small number of enhanced audiobooks embed a
+  unique image for each chapter (Apple's chapter-artwork convention, mostly
+  seen on podcasts and a handful of audiobook productions). Midnight
+  Athenaeum now detects this, caches each chapter's image, and shows it as a
+  thumbnail in the chapter list — the mini-player and Windows media flyout
+  also switch to the current chapter's art while it's playing, falling back
+  to the book cover otherwise. Books without this (the vast majority) are
+  completely unaffected.
+
 ## [0.17.0] - 2026-09-11
 ### Added
 - **Gapless multi-track playback** — crossing from one file to the next in a

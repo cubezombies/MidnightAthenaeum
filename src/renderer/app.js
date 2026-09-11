@@ -1494,7 +1494,17 @@ function renderChapters(book) {
     time.className = 'chapter-time';
     time.textContent = formatTime(ch.start);
 
-    li.append(num, title, time);
+    // Rare — only enhanced audiobooks with an embedded per-chapter artwork
+    // track have this (see mp4-chapters.js's readChapterImages).
+    if (ch.imageUrl) {
+      const thumb = document.createElement('img');
+      thumb.className = 'chapter-thumb';
+      thumb.src = ch.imageUrl;
+      thumb.alt = '';
+      li.append(num, thumb, title, time);
+    } else {
+      li.append(num, title, time);
+    }
     li.addEventListener('click', () => {
       if (state.playing?.id !== book.id) loadIntoPlayer(book);
       seekTo(ch.start, { autoplay: true });
@@ -2247,7 +2257,22 @@ function updateTimeUI() {
       if (state.current?.id === book.id) highlightChapter(idx);
       if (idx !== state.playingChapterIndex) {
         state.playingChapterIndex = idx;
-        if (navigator.mediaSession?.metadata) navigator.mediaSession.metadata.album = `${prefix}. ${ch.title}`;
+        // A handful of enhanced audiobooks embed per-chapter artwork (see
+        // mp4-chapters.js's readChapterImages) — show it in the mini-player
+        // and OS media flyout while that chapter is active, falling back to
+        // the book cover for the (vast majority of) chapters without one.
+        const artUrl = ch.imageUrl || book.coverUrl;
+        el.miniCover.src = artUrl || '';
+        if (navigator.mediaSession?.metadata) {
+          navigator.mediaSession.metadata.album = `${prefix}. ${ch.title}`;
+          // Match setMediaSessionMetadata's original book-open-time
+          // behavior for "nothing to show" ([], not a one-item array with
+          // an empty src) -- most books have neither a chapter image nor
+          // (rarely) no cover at all.
+          navigator.mediaSession.metadata.artwork = artUrl
+            ? [{ src: artUrl, sizes: '512x512', type: 'image/jpeg' }]
+            : [];
+        }
         pushDiscordActivity();
         updateReadAlong(idx);
       }

@@ -11,6 +11,12 @@
  *
  * Usage: node scripts/test-unpack.cjs
  * Exit code 0 on pass, 1 on any failure.
+ *
+ * Don't edit source files while this is running (including in the
+ * background): electron-builder's file-copy step reads them mid-pack, and
+ * an edit landing between its read calls has produced a silently truncated
+ * file in the packaged output before -- not a real bug, just confusing to
+ * debug from the test's side.
  */
 
 const path = require('node:path');

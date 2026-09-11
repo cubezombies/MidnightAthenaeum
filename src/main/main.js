@@ -339,7 +339,14 @@ function toClientBook(book) {
     year: book.year,
     description: override?.description || book.description,
     duration: book.duration,
-    chapters: book.chapters,
+    // Same raw-path -> ab-media:// URL treatment as cover/coverThumb below,
+    // per chapter — most chapters have no image (see mp4-chapters.js's
+    // readChapterImages), so this skips the copy for the common case.
+    chapters: book.chapters.map((ch) => {
+      if (!ch.image) return ch;
+      const { image, ...rest } = ch;
+      return { ...rest, imageUrl: mediaUrl(image) };
+    }),
     tracks,
     coverUrl: cover ? mediaUrl(cover) : null,
     coverThumbUrl: coverThumb ? mediaUrl(coverThumb) : null,

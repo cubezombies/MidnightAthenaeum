@@ -703,9 +703,24 @@ isn't a primed natural boundary (chapter jump, seek-bar drag, scrubbing past the
 primed track). Verified against real generated audio crossing a track boundary —
 `currentTime` advances continuously with no freeze and no stall in the UI.
 
-### 5. Per-chapter embedded artwork — **S**
-Some `.m4b` chapters carry their own images (`IChapter.image`). Surface them in
-the chapter list / now-playing view for books that have them.
+### 5. Per-chapter embedded artwork — **shipped** ✅
+Some `.m4b`s (rare — Apple's chapter-artwork convention, mostly enhanced
+audiobooks/podcasts) reference a second chapter track (handler `vide`)
+carrying one image per chapter, in the same order as the text track's
+titles. Note on the original premise: this item named `IChapter.image`, but
+that field is populated only by music-metadata's ID3v2 CHAP+APIC parser
+(MP3 podcast-style chapter tags) — never by its MP4 chapter-track parser,
+so it was never going to surface anything for `.m4b` specifically. Shipped
+the real m4b mechanism instead: `mp4-chapters.js`'s `readChapterImages`
+reads the second track's sample bytes, only trusted when its sample count
+exactly matches the already-parsed chapter count (so an unrelated second
+video track never gets misattributed to the wrong chapter); `parse-core.js`
+decodes/re-encodes each through `nativeImage` before ever writing or
+serving it — same never-trust-embedded-bytes-directly posture as cover art
+— and caches it to `${bookId}-ch${index}.jpg`. Surfaced as a small
+thumbnail in the chapter list and swapped into the mini-player/OS media
+flyout artwork while that chapter is playing, falling back to the book
+cover otherwise.
 
 ### 6. Full-cast / graphic audio productions — **M**
 GraphicAudio and similar "movie in your mind" productions are structurally
@@ -1175,13 +1190,11 @@ ordered by value against effort:
 4. **Full-cast / graphic audio productions** (Tier 3 #6) — 28 titles in this
    library scan as split, mislabelled entries today. Touches how a book's
    identity is derived, so worth doing before sidecar metadata rather than
-   after.
-5. **Per-chapter artwork** (Tier 3 #5) — small, purely playback polish, no
-   architectural risk. (Gapless playback, Tier 3 #4, shipped.)
-6. **Query-per-view** (Performance #1, the open half) — the real ceiling for
+   after. (Gapless playback and per-chapter artwork, Tier 3 #4–#5, shipped.)
+5. **Query-per-view** (Performance #1, the open half) — the real ceiling for
    very large libraries, and a prerequisite for instant server-side search.
    Bigger: it changes the app's interaction model, so it wants its own pass.
-7. **Waveform / seek preview, auto-generated chapters, bookmark clips** —
+6. **Waveform / seek preview, auto-generated chapters, bookmark clips** —
    genuine features rather than fixes; pick by appetite.
 
 Deliberately **not** sequenced: the Electron major bump and the `jimp`

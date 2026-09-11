@@ -436,6 +436,7 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 .chapter:hover { background: var(--bg-elev); }
 .chapter.active { background: var(--accent-soft); border-color: var(--accent); }
 .chapter-num { color: var(--muted); font-size: 12px; width: 26px; text-align: right; flex-shrink: 0; }
+.chapter-thumb { width: 32px; height: 32px; border-radius: 4px; object-fit: cover; flex-shrink: 0; }
 .chapter-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chapter-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 

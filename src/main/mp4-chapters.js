@@ -12,6 +12,10 @@
  * Boxes are located with targeted reads rather than slurping `moov`, because
  * the audio track's sample tables can run to tens of megabytes and we only
  * need the chapter track's much smaller ones.
+ *
+ * A small number of enhanced audiobooks/podcasts also reference a second
+ * chapter track (handler `vide`) carrying one artwork image per chapter, in
+ * the same order as the text track's titles — see readChapterImages.
  */
 
 const { open } = require('node:fs/promises');
@@ -202,29 +206,42 @@ function decodeChapterTitle(buf) {
   return body.toString('utf8').replace(/\0+$/, '').trim();
 }
 
-async function readTextTrackChapters(reader, chapterTrack) {
-  const stbl = await reader.descend(chapterTrack.trak, ['mdia', 'minf', 'stbl']);
-  if (!stbl) return [];
+/**
+ * A track's sample table (stbl): each sample's file offset and byte size, in
+ * order. Shared by the text (title) and video (chapter-image) chapter track
+ * readers below -- both need "where is sample N and how big is it", they
+ * just decode the bytes differently once they have them.
+ */
+async function readSampleTable(reader, trak) {
+  const stbl = await reader.descend(trak, ['mdia', 'minf', 'stbl']);
+  if (!stbl) return null;
 
   const boxes = await reader.children(stbl.contentStart, stbl.contentEnd);
   const byType = Object.fromEntries(boxes.map((b) => [b.type, b]));
-  if (!byType.stts || !byType.stsz || !byType.stsc) return [];
-
+  if (!byType.stsz || !byType.stsc) return null;
   const offsetBox = byType.stco ?? byType.co64;
-  if (!offsetBox) return [];
+  if (!offsetBox) return null;
 
-  const [sttsBuf, stszBuf, stscBuf, offsetBuf] = await Promise.all([
-    reader.content(byType.stts),
+  const [stszBuf, stscBuf, offsetBuf] = await Promise.all([
     reader.content(byType.stsz),
     reader.content(byType.stsc),
     reader.content(offsetBox),
   ]);
 
-  const deltas = parseStts(sttsBuf);
   const sizes = parseStsz(stszBuf);
   const stsc = parseStsc(stscBuf);
   const chunkOffsets = parseChunkOffsets(offsetBuf, Boolean(byType.co64));
   const sampleOffsets = buildSampleOffsets(sizes, stsc, chunkOffsets);
+
+  return { sizes, sampleOffsets, sttsBox: byType.stts };
+}
+
+async function readTextTrackChapters(reader, chapterTrack) {
+  const table = await readSampleTable(reader, chapterTrack.trak);
+  if (!table || !table.sttsBox) return [];
+
+  const deltas = parseStts(await reader.content(table.sttsBox));
+  const { sizes, sampleOffsets } = table;
 
   const timescale = chapterTrack.timescale || 1000;
   const chapters = [];
@@ -245,6 +262,45 @@ async function readTextTrackChapters(reader, chapterTrack) {
   }
 
   return chapters;
+}
+
+const IMAGE_MAGIC = [
+  { bytes: [0xff, 0xd8, 0xff], ext: '.jpg' },
+  { bytes: [0x89, 0x50, 0x4e, 0x47], ext: '.png' },
+];
+// Generous cap for one chapter-artwork sample; real ones are typically well
+// under this (podcast/audiobook chapter art, not a full cover-art scan).
+const MAX_CHAPTER_IMAGE_BYTES = 4 * 1024 * 1024;
+
+function sniffImage(buf) {
+  return IMAGE_MAGIC.find((m) => m.bytes.every((b, i) => buf[i] === b)) ?? null;
+}
+
+/**
+ * Some enhanced audiobooks/podcasts ship a second chapter-referenced track
+ * (handler 'vide') carrying one artwork image per chapter, in the same
+ * sample order as the text track's titles -- Apple's chapter-image
+ * convention. Only trusted when the sample count matches `expectedCount`
+ * (the already-parsed chapter count) exactly; a mismatch means this isn't
+ * that convention, or the two tracks disagree for some other reason, so
+ * callers get nothing back rather than a misaligned guess pairing the wrong
+ * image with the wrong chapter.
+ */
+async function readChapterImages(reader, imageTrack, expectedCount) {
+  const table = await readSampleTable(reader, imageTrack.trak);
+  if (!table || table.sizes.length !== expectedCount) return null;
+
+  const images = new Array(expectedCount).fill(null);
+  for (let i = 0; i < expectedCount; i += 1) {
+    const offset = table.sampleOffsets[i];
+    const size = table.sizes[i];
+    if (offset === undefined || !size || size > MAX_CHAPTER_IMAGE_BYTES) continue;
+    const buf = Buffer.alloc(size);
+    await reader.fh.read(buf, 0, size, offset);
+    const format = sniffImage(buf);
+    if (format) images[i] = { data: buf, ext: format.ext };
+  }
+  return images.some(Boolean) ? images : null;
 }
 
 /** Nero-style chapter list, used by some taggers. */
@@ -324,11 +380,12 @@ async function readMp4Duration(filePath) {
 
 /**
  * The expensive part: walks every track, finds the chapter track, and reads
- * its full sample table plus one disk read per chapter title. `knownDuration`
+ * its full sample table plus one disk read per chapter title (and, for the
+ * rare book that has one, one more per chapter-artwork image). `knownDuration`
  * lets a caller that already has a trusted duration (e.g. from phase 1) skip
  * re-reading `mvhd`; omit it to have this read duration itself too.
  *
- * @returns {Promise<{chapters: Array<{title:string,start:number}>, duration: number}>}
+ * @returns {Promise<{chapters: Array<{title:string,start:number,image?:{data:Buffer,ext:string}}>, duration: number}>}
  */
 async function readMp4Chapters(filePath, knownDuration) {
   const result = await withMoov(filePath, async (reader, moov) => {
@@ -351,6 +408,19 @@ async function readMp4Chapters(filePath, knownDuration) {
 
     // Drop chapters that fall outside the running time; a few taggers leave junk.
     if (duration > 0) chapters = chapters.filter((c) => c.start <= duration + 1);
+
+    // A second chapter-referenced track can carry one artwork image per
+    // chapter (see readChapterImages) -- checked after the duration filter
+    // above, so the expected count matches the chapters actually kept; if
+    // filtering dropped any, the image track's sample count won't line up
+    // and this correctly skips rather than misaligning images to chapters.
+    if (chapters.length) {
+      const imageTrack = tracks.find((t) => refs.includes(t.trackId) && t.handler === 'vide');
+      if (imageTrack) {
+        const images = await readChapterImages(reader, imageTrack, chapters.length);
+        if (images) chapters.forEach((ch, i) => { if (images[i]) ch.image = images[i]; });
+      }
+    }
 
     return { chapters, duration };
   });
