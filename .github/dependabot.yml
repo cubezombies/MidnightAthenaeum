@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    ignore:
+      # Electron gets bumped deliberately, one version at a time, with a full
+      # manual re-verification pass (playback, scanning, covers,
+      # transcription, the library database) -- see the v0.16.0 Electron
+      # 34->43 update in CHANGELOG.md. A routine PR bumping it automatically
+      # would invite merging that without doing any of that.
+      - dependency-name: "electron"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
