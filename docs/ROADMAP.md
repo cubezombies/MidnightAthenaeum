@@ -782,21 +782,45 @@ so no new detection work was needed.
 filter since both were the natural next step for library filtering. Genre tags
 weren't extracted or stored anywhere before this: `parse-core.js`'s new
 `cleanGenres` reads `tags.common.genre`, splitting taggers that pack multiple
-genres into one slash/semicolon/comma-joined string and deduping
-case-insensitively (keeping first-seen casing); the result is persisted in a
-new `genresJson` column (via the standard `PRAGMA table_info` migration
-pattern) and flows through IPC as `book.genres`. The library toolbar gets an
-independent **Genre** dropdown (not a tab, since genre is multi-valued and
-open-ended rather than a fixed exclusive state) — populated from whatever's
-actually in the current library, cross-book-deduped the same
-case-insensitive way, and hidden entirely when no book has a genre tag.
-Genre filtering ANDs with the active status tab rather than replacing it, and
-the free-text search box also matches genre text. Verified end-to-end against
-a real scan: differently-cased genre values across books correctly deduped to
-one dropdown entry, a slash-joined tag correctly split and filtered
-independently, a no-genre book left the dropdown unaffected, and the Full
-cast tab correctly isolated a GraphicAudio book — all with zero console
-errors.
+genres into one joined string and deduping case-insensitively (keeping
+first-seen casing); the result is persisted in a new `genresJson` column (via
+the standard `PRAGMA table_info` migration pattern) and flows through IPC as
+`book.genres`. The library toolbar gets an independent **Genre** dropdown
+(not a tab, since genre is multi-valued and open-ended rather than a fixed
+exclusive state) — populated from whatever's actually in the current
+library, cross-book-deduped the same case-insensitive way, and hidden
+entirely when no book has a genre tag. Genre filtering ANDs with the active
+status tab rather than replacing it, and the free-text search box also
+matches genre text. Verified end-to-end against a real scan: differently-cased
+genre values across books correctly deduped to one dropdown entry, a
+slash-joined tag correctly split and filtered independently, a no-genre book
+left the dropdown unaffected, and the Full cast tab correctly isolated a
+GraphicAudio book — all with zero console errors.
+
+**Fixed the same day: "Audiobook" showing up as a genre.** A real-library
+sample (150 authors, `E:\Books`) turned up why: `cleanGenres` originally only
+split on `/;,`, but plenty of real Audible/Libation exports tag genre as a
+plain `:`-joined category breadcrumb (`"Science Fiction &
+Fantasy:Science Fiction:Adventure"`, most-specific segment last) which came
+through as one ugly unsplit string, and — worse — 73 of 177 sampled
+genre-tagged books had literally nothing but `"Audiobook"` (or `"Audio
+Book"`/`"AudioBook"`/`"Audio book"`) as their whole genre value: the file
+format, not what the book is about, but with nothing blocking it the format
+tag dominated the dropdown as if it were a genre choice. Fixed by splitting
+on `:` too and dropping a small blocklist of medium-not-genre values
+(`NON_GENRE_VALUES`) during cleaning. Since the on-disk cache keys a rescan
+off each file's own mtime/size (see [Performance & architecture
+optimizations](#performance--architecture-optimizations)) rather than a
+code-version check, a `cleanGenres` rule change alone would never reach
+already-scanned rows without this: `db.js`'s `rowToBook` now re-runs
+`cleanGenres` over the stored `genresJson` on every load too (idempotent on
+already-clean data), so the fix applies to existing libraries immediately on
+next launch, no rescan required. Verified against the real sample: the
+post-fix genre set is dominated by actual literary genres (LGBT, Lesbian
+Romance, Fantasy, Science Fiction, Mystery, Horror, Thriller, Romance, Young
+Adult, Crime, ...), zero "Audiobook" variants remain, and the breadcrumb tags
+now contribute their real category segments (e.g. "Supernatural", "Thriller &
+Suspense") as independent, selectable genres.
 
 Verified end-to-end against a real scan (not just the pure grouping-logic
 unit tests): two real sibling `(1 of 2)`/`(2 of 2)` `GraphicAudio` folders

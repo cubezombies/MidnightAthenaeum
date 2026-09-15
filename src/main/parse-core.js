@@ -179,22 +179,33 @@ function cleanText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+// Values real audiobook files tag as "genre" that describe the medium, not
+// what the book is about -- e.g. a Libation/Audible export writing plain
+// "Audiobook" as the whole genre tag, sometimes the only value present at
+// all. These aren't a literary genre a listener would ever want to filter
+// by, so they're dropped rather than surfaced next to "Fantasy"/"Horror".
+const NON_GENRE_VALUES = new Set(['audiobook', 'audiobooks', 'audio book', 'audio books']);
+
 /**
  * Cleans and dedupes a tag's genre list. Some taggers store multiple genres
- * as one slash/semicolon/comma-joined string per entry rather than separate
- * array items (music-metadata hands back whatever the file's own tagger
- * wrote), so this splits on those before deduping case-insensitively —
- * keeping the first-seen casing, since there's no canonical one to prefer.
+ * as one joined string per entry rather than separate array items
+ * (music-metadata hands back whatever the file's own tagger wrote) --
+ * slash/semicolon/comma-separated alternatives, or a colon-separated
+ * category breadcrumb (an Audible-style export's "Science Fiction &
+ * Fantasy:Science Fiction:Adventure" taxonomy path, most specific last) --
+ * so this splits on all of those before deduping case-insensitively,
+ * keeping the first-seen casing since there's no canonical one to prefer.
  */
 function cleanGenres(raw) {
   if (!Array.isArray(raw)) return [];
   const seen = new Set();
   const out = [];
   for (const entry of raw) {
-    for (const piece of String(entry ?? '').split(/[/;,]/)) {
+    for (const piece of String(entry ?? '').split(/[/;,:]/)) {
       const g = piece.trim();
       if (!g) continue;
       const key = g.toLowerCase();
+      if (NON_GENRE_VALUES.has(key)) continue;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(g);
@@ -472,6 +483,7 @@ module.exports = {
   hashId,
   mapLimit,
   readTags,
+  cleanGenres,
   cacheCoverFromPicture,
   generateCoverThumb,
   findFolderImage,

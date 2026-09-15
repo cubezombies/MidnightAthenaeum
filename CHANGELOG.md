@@ -8,6 +8,21 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-09-15
+### Fixed
+- **The genre filter was mostly just showing "Audiobook."** Genre tags
+  weren't being cleaned enough: plenty of real Audible/Libation exports tag
+  genre as a `:`-joined category breadcrumb (`"Science Fiction &
+  Fantasy:Science Fiction:Adventure"`), which came through as one unsplit
+  string, and — the actual complaint — a large share of real files tag genre
+  as literally nothing but `"Audiobook"` (the file format, not what the book
+  is about), which dominated the dropdown as if it were a genre choice.
+  Genre extraction now also splits on `:` and drops a short list of
+  medium-not-genre values (`"Audiobook"`, `"Audio Book"`, and case/spacing
+  variants), so the dropdown reflects real literary genres — Fantasy,
+  Horror, Mystery, Sci-Fi, and so on — instead. This applies retroactively
+  to libraries scanned before this fix, no rescan needed.
+
 ## [0.21.0] - 2026-09-15
 ### Added
 - **Full cast and genre library filters** — a new **Full cast** tab narrows

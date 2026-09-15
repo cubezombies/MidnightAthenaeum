@@ -5,6 +5,8 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const sqlite3 = require('@vscode/sqlite3');
 
+const { cleanGenres } = require('./parse-core');
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS books (
   id            TEXT PRIMARY KEY,
@@ -95,7 +97,14 @@ function rowToBook(row) {
     author: row.author,
     narrator: row.narrator,
     fullCast: Boolean(row.fullCast),
-    genres: JSON.parse(row.genresJson ?? '[]'),
+    // Re-run through cleanGenres on the way out, not just on the way in at
+    // scan time: a book scanned before a cleanGenres rule change (e.g. a
+    // newly blocklisted non-genre value like "Audiobook") won't get
+    // reparsed by a routine rescan at all -- unchanged files are served
+    // straight from cache by signature, regardless of code changes -- so
+    // this is what lets a rule fix apply retroactively without forcing
+    // every book to look re-tagged. Idempotent on already-clean data.
+    genres: cleanGenres(JSON.parse(row.genresJson ?? '[]')),
     year: row.year,
     description: row.description,
     duration: row.duration,
