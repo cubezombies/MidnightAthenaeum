@@ -20,7 +20,7 @@
   "devDependencies": {
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
-    "jimp": "^0.22.12",
+    "jimp": "^1.6.1",
     "png-to-ico": "^3.0.2"
   },
   "dependencies": {
