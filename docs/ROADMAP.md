@@ -773,8 +773,30 @@ whole library, 53 folders use an `x of y` part convention.
   exactly. Documented this explicitly in `duplicates.js` alongside its
   existing "Illegal Alien" verification note.
 
-A **Full cast** filter (pairing with the existing Has-ebook filter) is still
-a natural follow-on now that the type is known, but wasn't part of this pass.
+**Full cast filter — shipped ✅ (follow-on, later pass).** A `data-filter="fullcast"`
+library tab, paired with the existing Has-ebook filter, narrows the grid to
+`book.fullCast` — the flag this section's `detectFullCast` already computes,
+so no new detection work was needed.
+
+**Genre filter — shipped ✅ (same pass).** Built alongside the Full cast
+filter since both were the natural next step for library filtering. Genre tags
+weren't extracted or stored anywhere before this: `parse-core.js`'s new
+`cleanGenres` reads `tags.common.genre`, splitting taggers that pack multiple
+genres into one slash/semicolon/comma-joined string and deduping
+case-insensitively (keeping first-seen casing); the result is persisted in a
+new `genresJson` column (via the standard `PRAGMA table_info` migration
+pattern) and flows through IPC as `book.genres`. The library toolbar gets an
+independent **Genre** dropdown (not a tab, since genre is multi-valued and
+open-ended rather than a fixed exclusive state) — populated from whatever's
+actually in the current library, cross-book-deduped the same
+case-insensitive way, and hidden entirely when no book has a genre tag.
+Genre filtering ANDs with the active status tab rather than replacing it, and
+the free-text search box also matches genre text. Verified end-to-end against
+a real scan: differently-cased genre values across books correctly deduped to
+one dropdown entry, a slash-joined tag correctly split and filtered
+independently, a no-genre book left the dropdown unaffected, and the Full
+cast tab correctly isolated a GraphicAudio book — all with zero console
+errors.
 
 Verified end-to-end against a real scan (not just the pure grouping-logic
 unit tests): two real sibling `(1 of 2)`/`(2 of 2)` `GraphicAudio` folders

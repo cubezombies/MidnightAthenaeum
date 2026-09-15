@@ -8,6 +8,7 @@ const el = {
   emptyState: $('emptyState'), search: $('search'), libraryLoading: $('libraryLoading'),
   continueSection: $('continueSection'), continueRow: $('continueRow'),
   libraryToolbar: $('libraryToolbar'), filterTabs: $('filterTabs'), filterCount: $('filterCount'),
+  genreFilterLabel: $('genreFilterLabel'), genreSelect: $('genreSelect'),
   groupToggle: $('groupToggle'), sortSelect: $('sortSelect'),
   seriesView: $('seriesView'), seriesTitle: $('seriesTitle'), seriesSub: $('seriesSub'), seriesGrid: $('seriesGrid'),
   libraryView: $('libraryView'), bookView: $('bookView'),
@@ -126,7 +127,11 @@ const state = {
   activeChapter: -1,
   playingChapterIndex: -1, // like activeChapter, but for the OS media-session subtitle — tracks the playing book even when it's not the one currently open in the book view
   seeking: false,
-  filter: 'all',       // library filter: all | progress | finished | new
+  filter: 'all',       // library filter: all | progress | finished | new | ebook | fullcast
+  // '' = no genre filter. Not persisted across launches (unlike sort/group
+  // below) — the available genres depend on the current library, so
+  // restoring a stale choice could silently filter to nothing.
+  genreFilter: '',
   sort: localStorage.getItem('sort') || 'author',
   skipAmount: SKIP_AMOUNTS.has(Number(localStorage.getItem('skipAmount')))
     ? Number(localStorage.getItem('skipAmount')) : 30,
@@ -643,8 +648,59 @@ function matchesFilter(book) {
     case 'finished': return bookStatus(book.id) === 'finished';
     case 'new': return bookStatus(book.id) === 'new';
     case 'ebook': return Boolean(book.hasEbook);
+    case 'fullcast': return Boolean(book.fullCast);
     default: return true;
   }
+}
+
+/** A separate, independent dimension from matchesFilter — a book must pass both. */
+function matchesGenre(book) {
+  if (!state.genreFilter) return true;
+  const target = state.genreFilter.toLowerCase();
+  return (book.genres ?? []).some((g) => g.toLowerCase() === target);
+}
+
+/**
+ * Rebuilds the genre dropdown's options from whatever's actually in the
+ * library right now — genres aren't a fixed list like sort modes, they
+ * depend entirely on what the scanned files' tags contain. Case-
+ * insensitively deduped across books (same convention parse-core.js's
+ * cleanGenres uses within one book), keeping whichever casing was seen
+ * first. The whole control hides when no book has any genre tag at all,
+ * rather than showing a dropdown with nothing but "All genres" in it.
+ */
+function updateGenreFilterOptions() {
+  const seen = new Map(); // lowercase -> first-seen display casing
+  for (const book of state.books) {
+    for (const g of book.genres ?? []) {
+      const key = g.toLowerCase();
+      if (!seen.has(key)) seen.set(key, g);
+    }
+  }
+  const genres = [...seen.values()].sort((a, b) => a.localeCompare(b));
+
+  el.genreFilterLabel.classList.toggle('hidden', genres.length === 0);
+  if (!genres.length) return;
+
+  el.genreSelect.replaceChildren();
+  const allOpt = document.createElement('option');
+  allOpt.value = '';
+  allOpt.textContent = 'All genres';
+  el.genreSelect.append(allOpt);
+  for (const g of genres) {
+    const opt = document.createElement('option');
+    opt.value = g;
+    opt.textContent = g;
+    el.genreSelect.append(opt);
+  }
+
+  // Keep the current selection if a matching genre still exists (a rescan
+  // can change casing/spelling); otherwise fall back to "All genres" rather
+  // than silently filtering to a genre string that no longer exists.
+  const current = state.genreFilter;
+  const stillValid = current && genres.find((g) => g.toLowerCase() === current.toLowerCase());
+  state.genreFilter = stillValid || '';
+  el.genreSelect.value = state.genreFilter;
 }
 
 const byAuthor = (a, b) => a.author.localeCompare(b.author) || a.title.localeCompare(b.title);
@@ -843,8 +899,10 @@ function renderGrid() {
   const query = el.search.value.trim().toLowerCase();
   const matched = state.books.filter((b) => {
     if (!matchesFilter(b)) return false;
+    if (!matchesGenre(b)) return false;
     if (!query) return true;
-    return b.title.toLowerCase().includes(query) || b.author.toLowerCase().includes(query);
+    return b.title.toLowerCase().includes(query) || b.author.toLowerCase().includes(query)
+      || (b.genres ?? []).some((g) => g.toLowerCase().includes(query));
   });
   state.filtered = sortBooks(matched);
 
@@ -3010,6 +3068,12 @@ el.sortSelect.addEventListener('change', () => {
   renderGrid();
 });
 
+el.genreSelect.addEventListener('change', () => {
+  state.genreFilter = el.genreSelect.value;
+  el.main.scrollTop = 0;
+  renderGrid();
+});
+
 el.skipSilenceBtn.addEventListener('click', () => setSkipSilence(!state.skipSilence));
 el.normalizeBtn.addEventListener('click', () => setNormalize(!state.normalize));
 el.voiceBoostBtn.addEventListener('click', () => setVoiceBoost(!state.voiceBoost));
@@ -4400,6 +4464,7 @@ function applyState(next) {
   if (next.folderCounts) state.folderCounts = next.folderCounts;
   if (next.bookmarks) state.bookmarks = next.bookmarks;
   if (next.normalization) state.normalization = next.normalization;
+  updateGenreFilterOptions();
 
   // Keep the open book in sync with rescanned data.
   if (state.current) {

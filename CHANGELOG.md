@@ -8,6 +8,18 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-15
+### Added
+- **Full cast and genre library filters** — a new **Full cast** tab narrows
+  the grid to the full-cast/GraphicAudio productions detected in v0.20.0. A
+  new **Genre** dropdown (next to Sort) filters by genre tag, populated from
+  whatever's actually in your library and hidden entirely if none of your
+  books have one; it combines with whichever status tab is active rather than
+  replacing it, and the search box now also matches genre text. Genres
+  weren't tracked before this — they're read from the same tags as everything
+  else during a scan, splitting taggers that pack multiple genres into one
+  slash/semicolon/comma-joined string and deduping case-insensitively.
+
 ## [0.20.0] - 2026-09-15
 ### Added
 - **Full-cast / GraphicAudio production support** — a production like

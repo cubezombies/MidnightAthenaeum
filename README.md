@@ -49,6 +49,16 @@ overlay while you're dragging and adds the folder the same way "Folders → Add
 folder" would. Dropping something that isn't a folder (e.g. an individual file)
 is rejected with a toast rather than silently doing nothing.
 
+For a single book rather than a whole folder, the book detail view and
+right-click on any library card offer two narrower actions: **Remove from
+library** (drops it from Midnight Athenaeum, files untouched) and **Delete book
+(files too)** (also sends its files to the Recycle Bin — never a permanent
+delete). Either way, that book's progress, bookmarks, normalization,
+online-metadata override, ebook pairing, and transcript are cleared out too, so
+nothing orphaned is left behind; deleting also removes the book's folder itself
+if that leaves it completely empty (and only then — a folder shared with other
+books is never touched).
+
 ## Installer
 
 The easiest way to install Midnight Athenaeum is to grab the prebuilt installer from
@@ -71,7 +81,7 @@ will show an "unrecognized publisher" warning on first run — click **More
 info → Run anyway**.
 
 *Tested:* a full cycle using the actual downloaded release asset (not just a
-local build) — downloaded `MidnightAthenaeum-Setup-0.1.0.exe` from the published
+local build) — downloaded `MidnightAthenaeum-Setup-<version>.exe` from the published
 Release, verified its SHA-256 against the digest GitHub recorded for it,
 installed it silently to the default `%LOCALAPPDATA%\Programs\Midnight Athenaeum`
 location, confirmed the installed app loads the real library over IPC exactly
@@ -182,14 +192,23 @@ Real libraries mix two conventions, so the scanner splits on file type:
 | One `.m4b` / `.m4a` file | One book; chapters read from inside the file |
 | A folder of `.mp3` tracks | One book; each track becomes a chapter |
 | `Disc 1/`, `Disc 2/` subfolders | Merged into a single book |
+| GraphicAudio-style `Title (1 of 2)`, `Title (2 of 2)` sibling folders | Merged into a single book |
 
 A folder is only merged as discs when it has several audio subfolders *and* at
 least one is disc-named — so a series folder holding separate books per subfolder
-stays separate.
+stays separate. The same idea applies to full-cast/dramatized productions split
+across sibling folders (recognized from the `GraphicAudio` folder convention or
+a `[Dramatized Adaptation]`/"full cast" marker): they're merged into one book
+instead of showing up as two duplicate-titled entries, and marked with a badge
+on the card and in the book view, where the "Narrated by" label becomes "Cast:"
+since the source tag is typically a studio credit rather than a single narrator.
+A **Full cast** library filter tab narrows the grid to just these.
 
 Multi-track books play as one continuous timeline: the seek bar, chapter list and
 saved position are all in whole-book seconds, and playback rolls over file
-boundaries on its own.
+boundaries on its own — gaplessly, via a hidden second `<audio>` element that
+preloads the next track ahead of the boundary, so there's no stall crossing from
+one file to the next.
 
 ## Chapters
 
@@ -212,6 +231,13 @@ is a *fallback only* — real embedded chapters are never overridden. On the tes
 library it gave real chapters to ~47 otherwise-unnavigable books (some 80–180
 chapters long).
 
+**Per-chapter artwork.** A small number of enhanced audiobooks (mostly podcasts
+and a handful of productions) embed a unique image for each chapter, using
+Apple's chapter-artwork convention. When present, it's cached and shown as a
+thumbnail in the chapter list, and the mini-player and Windows media flyout
+switch to the current chapter's art while it's playing, falling back to the
+book cover otherwise. Books without this — the vast majority — are unaffected.
+
 **Searching a chapter list.** Some books have a lot of chapters — *Wind and
 Truth* has 212 — so the book view has a search box above the list. It filters by
 title text or by chapter number (typing `150` jumps straight to chapter 150
@@ -233,11 +259,14 @@ installer assumes for anyone else).
   userData\               Electron/Chromium profile and caches
   covers\                 extracted cover art
   covers-online\          covers fetched via the online metadata lookup
-  library.json            scanned library
+  library.db              scanned library (SQLite; library.json, if present, is a legacy leftover)
   progress.json           per-book listening position, speed
   bookmarks.json          per-book bookmarks
   normalization.json      per-book measured loudness gain
   metadata-overrides.json per-book online metadata corrections
+  ebook-pairings.json     book <-> EPUB pairings for Read along
+  transcripts\            per-book Whisper transcripts
+  diagnostic.log          scan progress and unexpected-shutdown diagnostics
 ```
 
 Scanning happens in two phases. The first pass reads just tags and duration —
@@ -284,10 +313,22 @@ src/main/
   main.js            app lifecycle, window, IPC
   paths.js           where app data is written
   library.js         scanning, tag reading, cover extraction
+  parse-core.js      per-file metadata extraction (tags, genres, full-cast detection)
   group.js           files -> books (disc merging, m4b vs mp3-folder)
+  db.js              SQLite library persistence (library.db)
   mp4-chapters.js    MP4/M4B chapter + duration parser
+  cue.js             .cue sheet chapter fallback
   media-protocol.js  ab-media:// with byte-range support
   metadata-lookup.js Open Library search/description/cover fetch
+  audible.js         .aax decryption
+  epub.js            EPUB parsing for Read along
+  ebook-pairing.js   audiobook <-> EPUB matching
+  transcribe.js      whisper.cpp transcription + transcript search
+  clip.js            bookmark clip (audio/image) export
+  duplicates.js      duplicate-book detection
+  reorganize.js      reorganize-by-author moves + undo journal
+  finished.js        finished-status tracking
+  discord-presence.js Discord Rich Presence integration
   updater.js         electron-updater wiring
   taskbar.js         thumbbar buttons + jump list
   store.js           atomic JSON persistence
@@ -373,6 +414,25 @@ back or want to re-run it later.
 Per-chapter summaries are out of scope for now — Whisper transcribes, it
 doesn't summarize, and doing that well would need its own model/approach
 decision rather than an extension of this feature.
+
+## Audible .aax decryption
+
+**File → Decrypt Audible file (.aax)…** decrypts one of your own `.aax` files
+into a plain `.m4b` right alongside it, using your own Audible activation bytes
+(entered once via **File → Set Audible activation bytes…**, stored locally,
+used only to decrypt — never sent anywhere). The original `.aax` is never
+touched. Adding a folder that contains undecrypted Audible files — or running
+**File → Rescan library** on one already in your library — also offers to
+decrypt all of them at once. A decrypted book shows a small "AUDIBLE" badge on
+its card.
+
+## Listening stats
+
+The bar-chart icon in the top bar opens a **Stats** view: total time listened,
+books finished, your current day streak, top 5 authors and narrators, and a
+12-week listening pace chart. Streak and pace tracking started with this
+feature, so there's no historical data to back-fill from before you first saw
+it.
 
 ## Finding duplicate books
 
@@ -479,9 +539,13 @@ Midnight Athenaeum's side.
 
 The library opens with a **Continue listening** shelf — the books you're partway
 through, most-recently-played first, one click from resuming. Filter tabs (All /
-In progress / Finished / Not started) narrow the grid below. Each book remembers
-its own **playback speed**, and resuming after a pause **rewinds a few seconds**
-(more the longer you were away) so you don't lose the thread.
+In progress / Finished / Not started / Has ebook / Full cast) narrow the grid
+below, and a **Genre** dropdown next to Sort — populated from whatever genre
+tags are actually in your library, hidden entirely if none are — narrows it
+further on top of whichever tab is active; the search box also matches genre
+text. Each book remembers its own **playback speed**, and resuming after a
+pause **rewinds a few seconds** (more the longer you were away) so you don't
+lose the thread.
 
 The **Skip** dropdown in the player sets how far the ↺/↻ buttons and the plain
 `←`/`→` keys jump — 10/15/30/45/60s, 30 by default. The buttons' labels update to
@@ -536,6 +600,13 @@ delete you didn't mean is a one-click fix rather than something worth interrupti
 you to confirm. The same applies to **Reset progress** in the book view. Undo
 restores the exact bookmark or the exact position/speed you had, not an
 approximation.
+
+**Clip** on a bookmark row opens a small editor: two sliders pick a span around
+the bookmark, then export either a short MP3 you can share anywhere or a square
+image card (cover + title/author + quote + timestamp) ready for social. A span
+crossing a track boundary is handled correctly rather than cut off, and the
+quote auto-fills from a transcript when the book has one (fully editable
+either way).
 
 ## Skip silence
 

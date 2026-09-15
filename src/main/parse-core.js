@@ -179,6 +179,30 @@ function cleanText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/**
+ * Cleans and dedupes a tag's genre list. Some taggers store multiple genres
+ * as one slash/semicolon/comma-joined string per entry rather than separate
+ * array items (music-metadata hands back whatever the file's own tagger
+ * wrote), so this splits on those before deduping case-insensitively —
+ * keeping the first-seen casing, since there's no canonical one to prefer.
+ */
+function cleanGenres(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const entry of raw) {
+    for (const piece of String(entry ?? '').split(/[/;,]/)) {
+      const g = piece.trim();
+      if (!g) continue;
+      const key = g.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(g);
+    }
+  }
+  return out;
+}
+
 function titleFromFileName(name) {
   return name.replace(/[_.]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -280,6 +304,7 @@ async function buildSingleFileBook({ unit, stats, id }) {
     author: cleanText(tags.common.albumartist) || cleanText(tags.common.artist) || 'Unknown author',
     narrator: cleanText(tags.common.composer?.[0]) || null,
     fullCast: detectFullCast({ sourceDir: unit.dir, title, album: tags.common.album }),
+    genres: cleanGenres(tags.common.genre),
     year: tags.common.year ?? null,
     description: cleanText(tags.common.comment?.[0]?.text) || null,
     duration,
@@ -350,6 +375,7 @@ async function buildMultiTrackBook({ unit, stats, id }) {
       || 'Unknown author',
     narrator: cleanText(first?.tags.common.composer?.[0]) || null,
     fullCast: detectFullCast({ sourceDir: unit.dir, title, album: first?.tags.common.album }),
+    genres: cleanGenres(first?.tags.common.genre),
     year: first?.tags.common.year ?? null,
     description: cleanText(first?.tags.common.comment?.[0]?.text) || null,
     duration: elapsed,

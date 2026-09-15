@@ -168,9 +168,15 @@
           <button class="filter-tab" data-filter="finished" role="tab">Finished</button>
           <button class="filter-tab" data-filter="new" role="tab">Not started</button>
           <button class="filter-tab" data-filter="ebook" role="tab">Has ebook</button>
+          <button class="filter-tab" data-filter="fullcast" role="tab">Full cast</button>
         </div>
         <div class="toolbar-right">
           <span id="filterCount" class="filter-count muted small"></span>
+          <label id="genreFilterLabel" class="genre-label hidden">Genre
+            <select id="genreSelect" aria-label="Filter by genre">
+              <option value="">All genres</option>
+            </select>
+          </label>
           <label class="sort-label">Sort
             <select id="sortSelect" aria-label="Sort library">
               <option value="author">Author</option>

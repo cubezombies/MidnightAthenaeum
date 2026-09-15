@@ -341,6 +341,7 @@ function toClientBook(book) {
     // correct until its next rescan recomputes it, same precedent as
     // detailPending below.
     fullCast: Boolean(book.fullCast),
+    genres: book.genres ?? [],
     year: book.year,
     description: override?.description || book.description,
     duration: book.duration,

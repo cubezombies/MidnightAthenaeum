@@ -277,6 +277,12 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 .toolbar-right { display: flex; align-items: center; gap: 14px; }
 .sort-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .sort-label select { padding: 5px 7px; font-size: 13px; }
+
+/* Same shape as .sort-label — hidden entirely (see updateGenreFilterOptions)
+   when the library has no genre tags at all, so it never shows as a
+   dropdown with nothing to offer but "All genres". */
+.genre-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.genre-label select { padding: 5px 7px; font-size: 13px; max-width: 160px; }
 .group-toggle { padding: 6px 12px; font-size: 13px; }
 .group-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 

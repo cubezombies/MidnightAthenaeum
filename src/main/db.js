@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS books (
   author        TEXT NOT NULL,
   narrator      TEXT,
   fullCast      INTEGER NOT NULL DEFAULT 0,
+  genresJson    TEXT NOT NULL DEFAULT '[]',
   year          INTEGER,
   description   TEXT,
   duration      REAL NOT NULL,
@@ -37,11 +38,11 @@ CREATE TABLE IF NOT EXISTS folders (
 `;
 
 const UPSERT_SQL = `
-INSERT INTO books (id, kind, sourceDir, title, author, narrator, fullCast, year, description, duration, cover, coverThumb, tracksJson, chaptersJson, signature, dirSig, detailPending, detailFailed, tagsFailed)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO books (id, kind, sourceDir, title, author, narrator, fullCast, genresJson, year, description, duration, cover, coverThumb, tracksJson, chaptersJson, signature, dirSig, detailPending, detailFailed, tagsFailed)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   kind=excluded.kind, sourceDir=excluded.sourceDir, title=excluded.title, author=excluded.author,
-  narrator=excluded.narrator, fullCast=excluded.fullCast, year=excluded.year, description=excluded.description, duration=excluded.duration,
+  narrator=excluded.narrator, fullCast=excluded.fullCast, genresJson=excluded.genresJson, year=excluded.year, description=excluded.description, duration=excluded.duration,
   cover=excluded.cover, coverThumb=excluded.coverThumb, tracksJson=excluded.tracksJson, chaptersJson=excluded.chaptersJson,
   signature=excluded.signature, dirSig=excluded.dirSig, detailPending=excluded.detailPending,
   detailFailed=excluded.detailFailed, tagsFailed=excluded.tagsFailed
@@ -94,6 +95,7 @@ function rowToBook(row) {
     author: row.author,
     narrator: row.narrator,
     fullCast: Boolean(row.fullCast),
+    genres: JSON.parse(row.genresJson ?? '[]'),
     year: row.year,
     description: row.description,
     duration: row.duration,
@@ -112,7 +114,7 @@ function rowToBook(row) {
 function bookToParams(book) {
   return [
     book.id, book.kind, book.sourceDir, book.title, book.author,
-    book.narrator ?? null, book.fullCast ? 1 : 0, book.year ?? null, book.description ?? null,
+    book.narrator ?? null, book.fullCast ? 1 : 0, JSON.stringify(book.genres ?? []), book.year ?? null, book.description ?? null,
     book.duration, book.cover ?? null, book.coverThumb ?? null,
     JSON.stringify(book.tracks ?? []), JSON.stringify(book.chapters ?? []),
     book.signature, book.dirSig ?? null,
@@ -146,6 +148,11 @@ async function runSchema(db) {
   // until then, never anything destructive.
   if (!columns.some((c) => c.name === 'fullCast')) {
     await run(db, 'ALTER TABLE books ADD COLUMN fullCast INTEGER NOT NULL DEFAULT 0');
+  }
+  // Same pattern again for genresJson. Existing rows get '[]' until their
+  // next scan fills in whatever genre tag(s) the file actually carries.
+  if (!columns.some((c) => c.name === 'genresJson')) {
+    await run(db, "ALTER TABLE books ADD COLUMN genresJson TEXT NOT NULL DEFAULT '[]'");
   }
   await run(db, 'PRAGMA journal_mode = DELETE');
   await run(db, 'PRAGMA synchronous = FULL');
