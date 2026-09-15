@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS books (
   title         TEXT NOT NULL,
   author        TEXT NOT NULL,
   narrator      TEXT,
+  fullCast      INTEGER NOT NULL DEFAULT 0,
   year          INTEGER,
   description   TEXT,
   duration      REAL NOT NULL,
@@ -36,11 +37,11 @@ CREATE TABLE IF NOT EXISTS folders (
 `;
 
 const UPSERT_SQL = `
-INSERT INTO books (id, kind, sourceDir, title, author, narrator, year, description, duration, cover, coverThumb, tracksJson, chaptersJson, signature, dirSig, detailPending, detailFailed, tagsFailed)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+INSERT INTO books (id, kind, sourceDir, title, author, narrator, fullCast, year, description, duration, cover, coverThumb, tracksJson, chaptersJson, signature, dirSig, detailPending, detailFailed, tagsFailed)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   kind=excluded.kind, sourceDir=excluded.sourceDir, title=excluded.title, author=excluded.author,
-  narrator=excluded.narrator, year=excluded.year, description=excluded.description, duration=excluded.duration,
+  narrator=excluded.narrator, fullCast=excluded.fullCast, year=excluded.year, description=excluded.description, duration=excluded.duration,
   cover=excluded.cover, coverThumb=excluded.coverThumb, tracksJson=excluded.tracksJson, chaptersJson=excluded.chaptersJson,
   signature=excluded.signature, dirSig=excluded.dirSig, detailPending=excluded.detailPending,
   detailFailed=excluded.detailFailed, tagsFailed=excluded.tagsFailed
@@ -92,6 +93,7 @@ function rowToBook(row) {
     title: row.title,
     author: row.author,
     narrator: row.narrator,
+    fullCast: Boolean(row.fullCast),
     year: row.year,
     description: row.description,
     duration: row.duration,
@@ -110,7 +112,7 @@ function rowToBook(row) {
 function bookToParams(book) {
   return [
     book.id, book.kind, book.sourceDir, book.title, book.author,
-    book.narrator ?? null, book.year ?? null, book.description ?? null,
+    book.narrator ?? null, book.fullCast ? 1 : 0, book.year ?? null, book.description ?? null,
     book.duration, book.cover ?? null, book.coverThumb ?? null,
     JSON.stringify(book.tracks ?? []), JSON.stringify(book.chapters ?? []),
     book.signature, book.dirSig ?? null,
@@ -137,6 +139,13 @@ async function runSchema(db) {
   // per-file check on the next scan and record one for the scan after.
   if (!columns.some((c) => c.name === 'dirSig')) {
     await run(db, 'ALTER TABLE books ADD COLUMN dirSig TEXT');
+  }
+  // Same self-correcting pattern again for fullCast. Existing rows get 0
+  // (not full-cast) until their next scan recomputes it — a book that's
+  // actually a full-cast production just shows the old "Narrated by" label
+  // until then, never anything destructive.
+  if (!columns.some((c) => c.name === 'fullCast')) {
+    await run(db, 'ALTER TABLE books ADD COLUMN fullCast INTEGER NOT NULL DEFAULT 0');
   }
   await run(db, 'PRAGMA journal_mode = DELETE');
   await run(db, 'PRAGMA synchronous = FULL');

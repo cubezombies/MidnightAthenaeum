@@ -16,6 +16,16 @@
  * library: "Illegal Alien" by Robert J. Sawyer has three genuinely
  * different narrators (41-42 tracks each, all different durations) sitting
  * right next to cases that really were the same file copied twice.
+ *
+ * Also explicitly verified for full-cast/dramatized productions (see
+ * parse-core.js's detectFullCast): a GraphicAudio dramatization and the
+ * straight narration of the same book share a title+author bucket, often
+ * with an exactly-matching title, but never match on (track count,
+ * duration) — a dramatization's scene-based track count and runtime (with
+ * sound design, frequently abridged) never coincide with an unabridged
+ * narration's. They land in separate recordings and are never offered for
+ * removal against each other, with no code change needed here — this
+ * grouping already did the right thing.
  */
 
 const fsp = require('node:fs/promises');

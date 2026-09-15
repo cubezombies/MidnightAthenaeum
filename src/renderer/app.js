@@ -20,7 +20,7 @@ const el = {
   folders: document.querySelector('.folders'), foldersBtn: $('foldersBtn'), foldersMenu: $('foldersMenu'),
   foldersList: $('foldersList'),
   bookCover: $('bookCover'), bookTitle: $('bookTitle'), bookAuthor: $('bookAuthor'),
-  bookSub: $('bookSub'), bookDesc: $('bookDesc'), chapterList: $('chapterList'),
+  bookSub: $('bookSub'), fullCastBadge: $('fullCastBadge'), bookDesc: $('bookDesc'), chapterList: $('chapterList'),
   chapterCount: $('chapterCount'), chapterSearch: $('chapterSearch'),
   resetProgressBtn: $('resetProgressBtn'),
   finishedToggleBtn: $('finishedToggleBtn'),
@@ -571,6 +571,13 @@ function buildCard(book, { badge, delegate } = {}) {
     eb.title = 'Ebook available — Read along from the book view';
     eb.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-book-open"></use></svg>';
     art.append(eb);
+  }
+  if (book.fullCast) {
+    const fc = document.createElement('div');
+    fc.className = 'full-cast-badge';
+    fc.textContent = 'FULL CAST';
+    fc.title = 'Full-cast/dramatized production, not a single narrator';
+    art.append(fc);
   }
   if (book.isAudibleOrigin) {
     const ab = document.createElement('div');
@@ -1286,6 +1293,10 @@ function formatStatsDuration(totalSeconds) {
 function topBy(field, limit = 5) {
   const counts = new Map();
   for (const book of state.books) {
+    // A full-cast production's "narrator" field is really a studio credit
+    // (see parse-core.js's detectFullCast) — counting it here would be the
+    // same misrepresentation renderBookHeader avoids for the book view.
+    if (field === 'narrator' && book.fullCast) continue;
     const value = book[field];
     if (!value || !state.progress[book.id]) continue;
     counts.set(value, (counts.get(value) ?? 0) + 1);
@@ -1377,10 +1388,15 @@ function renderBookHeader(book) {
   el.bookAuthor.textContent = book.author;
 
   const bits = [formatDurationLong(book.duration)];
-  if (book.narrator) bits.push(`Narrated by ${book.narrator}`);
+  // A full-cast/dramatized production has a cast, not a narrator — the tag
+  // it's stored in (composer) is usually a studio credit, and "Narrated by"
+  // would misrepresent it either way. See parse-core.js's detectFullCast.
+  if (book.narrator) bits.push(book.fullCast ? `Cast: ${book.narrator}` : `Narrated by ${book.narrator}`);
   if (book.year) bits.push(String(book.year));
   bits.push(book.kind === 'multi' ? `${book.trackCount} files` : book.fileName);
   el.bookSub.textContent = bits.join(' · ');
+
+  el.fullCastBadge.classList.toggle('hidden', !book.fullCast);
 
   el.bookDesc.textContent = book.description || '';
   el.bookDesc.classList.toggle('hidden', !book.description);

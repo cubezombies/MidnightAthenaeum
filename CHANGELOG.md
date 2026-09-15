@@ -8,6 +8,18 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-15
+### Added
+- **Full-cast / GraphicAudio production support** — a production like
+  GraphicAudio split across sibling folders (`Title (1 of 2)`, `Title (2 of
+  2)`) is now merged into one book with a single continuous timeline,
+  instead of showing up as two unrelated, duplicate-titled entries. Full-cast
+  and dramatized productions are detected (from the `GraphicAudio` folder
+  convention or a `[Dramatized Adaptation]`/"full cast" marker) and marked
+  with a badge on the card and in the book view; the misleading "Narrated
+  by" label is now "Cast:" for these, since the tag it comes from is
+  typically a studio credit rather than a single narrator.
+
 ## [0.19.0] - 2026-09-15
 ### Added
 - **Bookmark clips: export & share cards** — a new "Clip" button on each

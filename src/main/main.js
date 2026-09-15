@@ -337,6 +337,10 @@ function toClientBook(book) {
     title: override?.title || book.title,
     author: override?.author || book.author,
     narrator: book.narrator,
+    // Undefined (falsy) on any book scanned before this field existed —
+    // correct until its next rescan recomputes it, same precedent as
+    // detailPending below.
+    fullCast: Boolean(book.fullCast),
     year: book.year,
     description: override?.description || book.description,
     duration: book.duration,

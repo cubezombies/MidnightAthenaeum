@@ -5,7 +5,7 @@ const fsp = require('node:fs/promises');
 
 const { COVER_CACHE } = require('./paths');
 const { readMp4Duration } = require('./mp4-chapters');
-const { groupIntoBooks, naturalCompare } = require('./group');
+const { groupIntoBooks, naturalCompare, consolidatePartedFolders } = require('./group');
 const { hashId, mapLimit, unitSignature, statFiles, runTask } = require('./parse-core');
 
 const AUDIO_EXTENSIONS = new Set(['.m4b', '.m4a', '.mp3', '.aac', '.ogg', '.opus', '.flac', '.wav']);
@@ -141,7 +141,7 @@ async function scanLibrary(folders, cachedBooks = [], onProgress, { deep = false
     for await (const file of walk(folder)) files.push(file);
   }
 
-  const units = await consolidateSelfContainedParts(groupIntoBooks(files));
+  const units = await consolidateSelfContainedParts(consolidatePartedFolders(groupIntoBooks(files)));
   const cacheById = new Map(cachedBooks.map((b) => [b.id, b]));
   let done = 0;
 

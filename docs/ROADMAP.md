@@ -737,39 +737,50 @@ thumbnail in the chapter list and swapped into the mini-player/OS media
 flyout artwork while that chapter is playing, falling back to the book
 cover otherwise.
 
-### 6. Full-cast / graphic audio productions — **M**
+### 6. Full-cast / graphic audio productions — **shipped** ✅
 GraphicAudio and similar "movie in your mind" productions are structurally
 different from a narrated audiobook, and the library already has them:
 `E:\Books\GraphicAudio` holds 28 titles, 16 of them split across parts named
 `(1 of 2)` / `(2 of 2)`, and 4 tagged `[Dramatized Adaptation]`. Across the
 whole library, 53 folders use an `x of y` part convention.
 
-What breaks today:
+- **Parts across folders now merge.** `group.js`'s new `consolidatePartedFolders`
+  runs before `consolidateSelfContainedParts` (which only ever merged numbered
+  parts *within one folder*): sibling folders sharing the same parent, the
+  same title stripped of its `(N of M)` suffix, and the same total count merge
+  into one continuous-timeline unit, in part order — regardless of whether
+  each part is itself a single `.m4b`/`.m4a` or a folder of `.mp3` tracks. A
+  lone `(N of M)`-shaped folder with no matching sibling is left alone, which
+  is what keeps a real series index (`Book 2 of 12`, no `Book 1`/`3`/etc.
+  present as siblings) from being misread as a part split — the existing
+  title-based series parser still owns that case untouched. The merged book's
+  title comes from the stripped folder name, not a per-part album tag, since
+  a per-part tag can (and in this library's real GraphicAudio folder, does)
+  still carry its own `(N of M)` suffix.
+- **"Narrator" now reads "Cast" for these.** `parse-core.js`'s `detectFullCast`
+  flags a book from its folder path (a `GraphicAudio` path segment, with or
+  without a space) or an explicit `[Dramatized Adaptation]`/`full cast` marker
+  in the title. `book.fullCast` flows through to a "FULL CAST" card badge, a
+  "Full cast production" pill in the book view, and `renderBookHeader`
+  swapping "Narrated by" for "Cast:" — the underlying `composer`-tag value is
+  unchanged, only the label. The Top Narrators stat also excludes these now,
+  for the same reason.
+- **Confirmed not duplicates, no code change needed.** Verified directly:
+  duplicate detection's existing (track count, duration) split inside a
+  title+author bucket already keeps a dramatized adaptation and a straight
+  narration apart — a dramatization's scene-based track count and runtime
+  never coincide with an unabridged narration's, even when the title matches
+  exactly. Documented this explicitly in `duplicates.js` alongside its
+  existing "Illegal Alien" verification note.
 
-- **Parts scan as separate books.** `(1 of 2)` and `(2 of 2)` are distinct
-  folders with distinct tags, so a single production shows up as two
-  unrelated entries with duplicated titles. `consolidateSelfContainedParts`
-  merges numbered parts *within one folder*; this is the across-folders case,
-  and the existing series parser reads `x of y` as a series index rather than
-  as parts of one work.
-- **"Narrator" is wrong for a full cast.** These have a cast, not a narrator,
-  and the `composer` tag they land in is usually a studio credit. Showing it
-  as "Narrated by" is misleading.
-- **They are not duplicates.** Duplicate detection groups by title+author and
-  splits by duration/track count — a dramatized adaptation and the straight
-  narration of the same book are legitimately different recordings, and both
-  are worth keeping. Worth an explicit check that this holds, since the
-  titles often match exactly.
+A **Full cast** filter (pairing with the existing Has-ebook filter) is still
+a natural follow-on now that the type is known, but wasn't part of this pass.
 
-Scope: detect the `x of y` convention and merge parts into one book with a
-continuous timeline (the multi-track machinery already does this — it just
-needs to span folders); recognise `[Dramatized Adaptation]` / `GraphicAudio`
-and label the production type on the card and in the book view; prefer "Cast"
-over "Narrator" for those. A **Full cast** filter would be a natural follow-on
-once the type is known, and pairs with the existing Has-ebook filter.
-
-Worth doing before sidecar metadata (#2): both touch how a book's identity is
-derived, and getting parts merged first means less to redo.
+Verified end-to-end against a real scan (not just the pure grouping-logic
+unit tests): two real sibling `(1 of 2)`/`(2 of 2)` `GraphicAudio` folders
+correctly merged into one book with a clean title and all 4 scene tracks in
+one continuous timeline; an unrelated title in the same `GraphicAudio` parent
+stayed separate; a plain non-GraphicAudio book was completely unaffected.
 
 ### 7. Audible `.aax` support — **shipped** ✅ (AAX only, not AAXC)
 **File → Decrypt Audible file (.aax)…** picks one `.aax` via a native file
@@ -1202,14 +1213,12 @@ effort:
 3. **Sidecar metadata** (Tier 3 #2) — narrator + description from `.nfo`, and
    `series` from co-located `.abs`/`.opf`, fills the gaps title parsing
    can't reach. Best remaining metadata win for this library specifically.
-4. **Full-cast / graphic audio productions** (Tier 3 #6) — 28 titles in this
-   library scan as split, mislabelled entries today. Touches how a book's
-   identity is derived, so worth doing before sidecar metadata rather than
-   after. (Gapless playback and per-chapter artwork, Tier 3 #4–#5, shipped.)
-5. **Query-per-view** (Performance #1, the open half) — the real ceiling for
+   (Full-cast/graphic audio productions, Tier 3 #6, shipped — was sequenced
+   before this since both touch how a book's identity is derived.)
+4. **Query-per-view** (Performance #1, the open half) — the real ceiling for
    very large libraries, and a prerequisite for instant server-side search.
    Bigger: it changes the app's interaction model, so it wants its own pass.
-6. **Waveform / seek preview, auto-generated chapters** — genuine features
+5. **Waveform / seek preview, auto-generated chapters** — genuine features
    rather than fixes; pick by appetite. (Bookmark clips, Tier 2 #4, shipped.)
 
 Deliberately **not** sequenced: the Electron major bump and the `jimp`

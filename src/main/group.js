@@ -116,4 +116,80 @@ function groupIntoBooks(files) {
   return units;
 }
 
-module.exports = { groupIntoBooks, naturalCompare, stripDiscSuffix, looksLikeDisc };
+// "Title (1 of 2)", "Title (2 of 2)" — a whole production split across
+// sibling folders because it didn't fit in one file/folder, not a series of
+// separate books (common for full-cast/GraphicAudio productions: they run
+// for hours, so the folder's own duration can't tell a true multi-hour part
+// from a standalone book the way library.js's consolidateSelfContainedParts
+// tells short numbered files apart from full-length ones). Distinct from
+// PART_OF_TOTAL_DIR above, which is the *whole* folder name with no title —
+// this is a title followed by the "(N of M)" marker as a suffix. The folder
+// name itself is the signal here, not duration: two or more sibling folders
+// sharing the same parent, the same stripped title, and the same total
+// count are merged into one continuous-timeline unit, in part order.
+const PART_OF_TOTAL_SUFFIX = /^(.*?)[\s._-]*\(?\b(\d+)\s+of\s+(\d+)\b\)?[\s._-]*$/i;
+
+/** @returns {{base:string, n:number, total:number} | null} */
+function parsePartOfTotal(dirName) {
+  const m = PART_OF_TOTAL_SUFFIX.exec(dirName.trim());
+  if (!m) return null;
+  const base = m[1].trim();
+  const n = Number(m[2]);
+  const total = Number(m[3]);
+  if (!base || !n || !total || n < 1 || n > total) return null;
+  return { base, n, total };
+}
+
+/**
+ * Merges sibling units (from groupIntoBooks, before or after
+ * consolidateSelfContainedParts — either order works, since a unit this
+ * merges is skipped by the other pass regardless of which runs first) whose
+ * directory name parses as a matching "(N of M)" part. A lone part with no
+ * sibling (parsePartOfTotal matches but nothing else in the group) is left
+ * alone — merging needs at least one other part actually found, not just a
+ * folder name that looks like one.
+ *
+ * @param {Array<{kind:'single'|'multi', dir:string, name:string, files:string[]}>} units
+ */
+function consolidatePartedFolders(units) {
+  const groups = new Map();
+  for (const unit of units) {
+    const parsed = parsePartOfTotal(path.basename(unit.dir));
+    if (!parsed) continue;
+    const key = `${path.dirname(unit.dir)}::${parsed.base.toLowerCase()}::${parsed.total}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ unit, n: parsed.n, base: parsed.base });
+  }
+
+  const consumed = new Set();
+  const merged = [];
+  for (const parts of groups.values()) {
+    if (parts.length < 2) continue;
+    parts.sort((a, b) => a.n - b.n);
+
+    const files = [];
+    for (const { unit } of parts) {
+      consumed.add(unit);
+      files.push(...unit.files);
+    }
+    merged.push({
+      kind: 'multi',
+      dir: path.dirname(parts[0].unit.dir), // the shared parent — no single subfolder owns this book
+      name: parts[0].base,
+      files,
+      // buildMultiTrackBook prefers this over any one part's own album tag,
+      // which can (and in this library's real GraphicAudio folder, does)
+      // still carry the "(N of M)" suffix per-part rather than a clean
+      // shared title.
+      titleOverride: parts[0].base,
+    });
+  }
+
+  if (!merged.length) return units;
+  return [...units.filter((u) => !consumed.has(u)), ...merged];
+}
+
+module.exports = {
+  groupIntoBooks, naturalCompare, stripDiscSuffix, looksLikeDisc,
+  parsePartOfTotal, consolidatePartedFolders,
+};

@@ -200,6 +200,20 @@ function pickBookTitle(common, fallbackName) {
   return title || album || titleFromFileName(fallbackName);
 }
 
+// GraphicAudio and similar "movie in your mind" productions are structurally
+// different from a narrated audiobook: a full cast rather than one narrator,
+// and the composer tag they land in below is usually a studio/production
+// credit, not a performer -- showing it as "Narrated by" is misleading.
+// Detected from the folder path (GraphicAudio's own library convention is a
+// top-level "GraphicAudio" folder, with or without a space) or an explicit
+// "[Dramatized Adaptation]"/"full cast" marker in the title -- both real,
+// observed conventions in this library, not a guess at other possible ones.
+const FULL_CAST_RE = /\b(dramatized adaptation|full cast|graphic\s*audio)\b/i;
+
+function detectFullCast({ sourceDir, title, album }) {
+  return FULL_CAST_RE.test(sourceDir) || FULL_CAST_RE.test(title || '') || FULL_CAST_RE.test(album || '');
+}
+
 /** Build a signature so an unchanged book can be reused from cache. */
 function unitSignature(stats) {
   return stats.map((s) => `${s.filePath}:${s.mtimeMs}:${s.size}`).join('|');
@@ -256,14 +270,16 @@ async function buildSingleFileBook({ unit, stats, id }) {
   ]);
 
   const duration = tags.format.duration || mp4Duration || 0;
+  const title = pickBookTitle(tags.common, unit.name);
 
   return {
     id,
     kind: 'single',
     sourceDir: unit.dir,
-    title: pickBookTitle(tags.common, unit.name),
+    title,
     author: cleanText(tags.common.albumartist) || cleanText(tags.common.artist) || 'Unknown author',
     narrator: cleanText(tags.common.composer?.[0]) || null,
+    fullCast: detectFullCast({ sourceDir: unit.dir, title, album: tags.common.album }),
     year: tags.common.year ?? null,
     description: cleanText(tags.common.comment?.[0]?.text) || null,
     duration,
@@ -317,15 +333,23 @@ async function buildMultiTrackBook({ unit, stats, id }) {
     if (cueChapters.length > 1) chapterList = cueChapters;
   }
 
+  // consolidatePartedFolders sets this for a book merged from sibling
+  // "(N of M)" folders — it's the clean, already-stripped title, and it wins
+  // over the album tag because a per-part album tag can (and in this
+  // library's real GraphicAudio folder, does) still carry the per-part
+  // "(N of M)" suffix rather than a title shared across parts.
+  const title = cleanText(unit.titleOverride) || cleanText(first?.tags.common.album) || titleFromFileName(unit.name);
+
   return {
     id,
     kind: 'multi',
     sourceDir: unit.dir,
-    title: cleanText(first?.tags.common.album) || titleFromFileName(unit.name),
+    title,
     author: cleanText(first?.tags.common.albumartist)
       || cleanText(first?.tags.common.artist)
       || 'Unknown author',
     narrator: cleanText(first?.tags.common.composer?.[0]) || null,
+    fullCast: detectFullCast({ sourceDir: unit.dir, title, album: first?.tags.common.album }),
     year: first?.tags.common.year ?? null,
     description: cleanText(first?.tags.common.comment?.[0]?.text) || null,
     duration: elapsed,
