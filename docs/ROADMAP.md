@@ -505,10 +505,25 @@ read-along pairings) was never actually loaded from disk at startup, so
 every launch silently re-scanned the whole library and could overwrite
 manually-set pairings.
 
-### 4. Bookmark clips: export & share cards — **M**
-Turn a bookmark span into a short audio clip (via ffmpeg) or a shareable image
-card with cover + quote + timestamp. Differentiating and delightful; depends on
-bookmarks (Tier 1) and optionally transcripts (item 1) for auto-captioned quotes.
+### 4. Bookmark clips: export & share cards — **shipped** ✅
+A new "Clip" button on each bookmark row opens a small modal: two sliders pick
+a [start,end) span in a ±2-minute window around the bookmark, then export
+either an mp3 (`clip.js`, real ffmpeg, ~/mo's own `-ss`/`-t` per input) or a
+1080×1080 share-card PNG (cover + title/author + quote + timestamp, composited
+on a `<canvas>` in the renderer — nativeImage, this app's usual decode/resize
+tool, has no text-drawing API, so compositing had to happen here regardless).
+A span that straddles a track boundary is handled correctly, not silently cut
+off: `overlappingSegments` finds every track the span touches and ffmpeg's
+`concat` filter stitches their trimmed sub-ranges into one continuous output
+— verified against real ffmpeg, not just the boundary math in isolation (a
+40s span crossing two tracks came out exactly 15.05s once trimmed, matching
+the real per-track split exactly). The quote auto-fills from a transcript
+when one exists (concatenating every segment overlapping the span) and stays
+freely editable either way — the optional dependency the item named, now
+wired through `ensureTranscriptLoaded`. `ffmpeg-path.js` is new too: the
+same asar-unpack path rewrite was independently duplicated in transcribe.js
+and audible.js already, so this is now the third consumer sharing one copy
+rather than a fourth duplicate.
 
 ### 5. Auto-fix metadata from online sources — **shipped** ✅
 A **Look up online** button in the book view searches Open Library by
@@ -1175,9 +1190,9 @@ are not in the shipped app.
 
 ## Suggested sequencing
 
-Everything in the original sequencing plan has shipped — all of Tier 1, and
-Tier 2 apart from bookmark clips. What follows is what is actually left,
-ordered by value against effort:
+Everything in the original sequencing plan has shipped — all of Tier 1 and
+Tier 2. What follows is what is actually left, ordered by value against
+effort:
 
 1. **Reliability #2–#5** (surface parse failures, cancel a scan, occasional
    deep scan, flag unexpected exits) — all small, all address things that are
@@ -1194,8 +1209,8 @@ ordered by value against effort:
 5. **Query-per-view** (Performance #1, the open half) — the real ceiling for
    very large libraries, and a prerequisite for instant server-side search.
    Bigger: it changes the app's interaction model, so it wants its own pass.
-6. **Waveform / seek preview, auto-generated chapters, bookmark clips** —
-   genuine features rather than fixes; pick by appetite.
+6. **Waveform / seek preview, auto-generated chapters** — genuine features
+   rather than fixes; pick by appetite. (Bookmark clips, Tier 2 #4, shipped.)
 
 Deliberately **not** sequenced: the Electron major bump and the `jimp`
 question (see Security). Both are real, both need their own verification

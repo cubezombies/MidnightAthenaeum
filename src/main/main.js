@@ -163,6 +163,7 @@ const reorganizer = require('./reorganize');
 const epub = require('./epub');
 const ebookPairing = require('./ebook-pairing');
 const audible = require('./audible');
+const clip = require('./clip');
 
 registerScheme();
 
@@ -1735,6 +1736,64 @@ function registerIpc() {
     map[bookId] = list;
     bookmarksStore.set(map);
     return map;
+  });
+
+  /**
+   * Exports a whole-book-seconds span around a bookmark as an mp3, via
+   * clip.js/ffmpeg. Renderer-triggered (a button on the bookmark row), so
+   * this returns a plain {ok, error} result rather than throwing/rejecting
+   * across the IPC boundary — same convention as startTranscription.
+   */
+  ipcMain.handle('clip:exportAudio', async (_event, { bookId, start, end, suggestedName } = {}) => {
+    if (typeof bookId !== 'string' || typeof start !== 'number' || typeof end !== 'number' || end <= start) {
+      return { ok: false, error: 'Invalid clip range.' };
+    }
+    const book = libraryStore.getBook(bookId);
+    if (!book) return { ok: false, error: 'Book not found.' };
+    if (!clip.isAvailable()) return { ok: false, error: 'ffmpeg is not available in this build.' };
+    if (clip.isExporting()) return { ok: false, error: 'Already exporting a clip — wait for it to finish.' };
+
+    const name = reorganizer.sanitizeName(suggestedName || `${book.title} - clip`);
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export audio clip',
+      defaultPath: path.join(app.getPath('music'), `${name}.mp3`),
+      filters: [{ name: 'MP3 Audio', extensions: ['mp3'] }],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+
+    try {
+      await clip.exportAudioClip({ tracks: book.tracks, start, end, outputPath: filePath });
+      return { ok: true, path: filePath };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+
+  /**
+   * Writes a renderer-composited PNG (cover + quote + timestamp, drawn on a
+   * <canvas> — see app.js's buildShareCard) to a user-chosen location. No
+   * ffmpeg/clip.js involved; the renderer already has everything it needs
+   * (cover art, book metadata, quote text) to draw the card itself.
+   */
+  ipcMain.handle('clip:exportImage', async (_event, { dataUrl, suggestedName } = {}) => {
+    const prefix = 'data:image/png;base64,';
+    if (typeof dataUrl !== 'string' || !dataUrl.startsWith(prefix)) {
+      return { ok: false, error: 'Invalid image data.' };
+    }
+    const name = reorganizer.sanitizeName(suggestedName || 'quote card');
+    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export share card',
+      defaultPath: path.join(app.getPath('pictures'), `${name}.png`),
+      filters: [{ name: 'PNG Image', extensions: ['png'] }],
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+
+    try {
+      fs.writeFileSync(filePath, Buffer.from(dataUrl.slice(prefix.length), 'base64'));
+      return { ok: true, path: filePath };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
   });
 
   ipcMain.handle('normalization:save', (_event, { bookId, gain }) => {

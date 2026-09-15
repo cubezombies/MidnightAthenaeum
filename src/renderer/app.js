@@ -35,6 +35,13 @@ const el = {
   metadataPreviewCover: $('metadataPreviewCover'), metadataPreviewTitle: $('metadataPreviewTitle'),
   metadataPreviewAuthor: $('metadataPreviewAuthor'), metadataPreviewDesc: $('metadataPreviewDesc'),
   metadataApplyBtn: $('metadataApplyBtn'), metadataBackBtn: $('metadataBackBtn'),
+  clipModal: $('clipModal'), clipModalClose: $('clipModalClose'),
+  clipStartSlider: $('clipStartSlider'), clipEndSlider: $('clipEndSlider'),
+  clipStartLabel: $('clipStartLabel'), clipEndLabel: $('clipEndLabel'), clipDuration: $('clipDuration'),
+  clipTabAudio: $('clipTabAudio'), clipTabImage: $('clipTabImage'),
+  clipAudioPane: $('clipAudioPane'), clipImagePane: $('clipImagePane'),
+  clipExportAudioBtn: $('clipExportAudioBtn'), clipExportImageBtn: $('clipExportImageBtn'),
+  clipQuote: $('clipQuote'), clipCardCanvas: $('clipCardCanvas'), clipStatus: $('clipStatus'),
   transcribeBtn: $('transcribeBtn'), cancelTranscribeBtn: $('cancelTranscribeBtn'),
   searchTranscriptBtn: $('searchTranscriptBtn'), captionsBtn: $('captionsBtn'),
   deleteTranscriptBtn: $('deleteTranscriptBtn'), transcribeStatus: $('transcribeStatus'),
@@ -1581,6 +1588,11 @@ function buildBookmarkRow(book, bm) {
 
   const actions = document.createElement('div');
   actions.className = 'bookmark-actions';
+  const clipBtn = document.createElement('button');
+  clipBtn.className = 'bookmark-clip';
+  clipBtn.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-share"></use></svg>';
+  clipBtn.title = 'Create a clip from this bookmark';
+  clipBtn.addEventListener('click', () => openClipModal(book, bm));
   const del = document.createElement('button');
   del.className = 'bookmark-del';
   del.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>';
@@ -1590,7 +1602,7 @@ function buildBookmarkRow(book, bm) {
     refreshBookmarksView();
     showToast('Bookmark deleted.', () => restoreBookmark(book.id, bm));
   });
-  actions.append(del);
+  actions.append(clipBtn, del);
 
   li.append(jump, body, actions);
   return li;
@@ -1668,6 +1680,286 @@ function highlightChapter(index) {
     node.classList.toggle('active', Number(node.dataset.index) === index);
   }
 }
+
+/* ---------------- bookmark clips: export & share cards ----------------
+ * Turns a bookmark into either a short mp3 (ffmpeg, main process — see
+ * clip.js) or a shareable image card. The card is composited on a <canvas>
+ * here in the renderer rather than in the main process: nativeImage (this
+ * app's usual decode/resize/encode tool, chosen elsewhere specifically to
+ * avoid a third-party image library) can't draw text at all, so compositing
+ * has to happen on this side regardless. Both start from the same
+ * [start,end) whole-book-seconds span, adjustable via two sliders bounded to
+ * a window around the bookmark rather than the whole book.
+ */
+
+const CLIP_WINDOW_SECONDS = 120; // how far the sliders can reach before/after the bookmark
+const CLIP_DEFAULT_PREROLL = 10;
+const CLIP_DEFAULT_POSTROLL = 20;
+
+let clipState = null; // { book, bookmark, windowStart, windowEnd }
+
+function clipSliderToGlobal(value) {
+  return clipState.windowStart + Number(value);
+}
+function clipGlobalToSlider(seconds) {
+  return Math.round(seconds - clipState.windowStart);
+}
+
+function currentClipRange() {
+  return {
+    start: clipSliderToGlobal(el.clipStartSlider.value),
+    end: clipSliderToGlobal(el.clipEndSlider.value),
+  };
+}
+
+function updateClipLabels() {
+  const { start, end } = currentClipRange();
+  el.clipStartLabel.textContent = formatTime(start);
+  el.clipEndLabel.textContent = formatTime(end);
+  el.clipDuration.textContent = `${formatTime(Math.max(0, end - start))} clip`;
+}
+
+/** Concatenates transcript segments overlapping [start,end) — best-effort, empty if none/no transcript. */
+async function autoQuoteFor(bookId, start, end) {
+  const transcript = await ensureTranscriptLoaded(bookId);
+  if (!transcript?.segments?.length) return '';
+  return transcript.segments
+    .filter((s) => s.end > start && s.start < end)
+    .map((s) => s.text)
+    .join(' ')
+    .trim();
+}
+
+function loadImageEl(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    // Same reasoning as el.audio.crossOrigin — ab-media:// responses carry
+    // Access-Control-Allow-Origin, so this is what keeps the canvas
+    // untainted and toDataURL() from throwing a SecurityError.
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('image failed to load'));
+    img.src = url;
+  });
+}
+
+function wrapCanvasText(ctx, text, maxWidth) {
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const test = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(test).width > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function truncateForCanvas(ctx, text, maxWidth) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxWidth) t = t.slice(0, -1);
+  return `${t}…`;
+}
+
+/** Draws the share card onto el.clipCardCanvas and returns it as a PNG data URL. */
+async function drawShareCard(book, quoteText, start) {
+  const canvas = el.clipCardCanvas;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width;
+  const H = canvas.height;
+  const pad = 80;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#12121a';
+  ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+
+  const coverSize = 260;
+  const coverX = (W - coverSize) / 2;
+  const coverY = pad;
+  const coverUrl = book.coverUrl || book.coverThumbUrl;
+  if (coverUrl) {
+    try {
+      const img = await loadImageEl(coverUrl);
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(coverX, coverY, coverSize, coverSize, 16);
+      ctx.clip();
+      const scale = Math.max(coverSize / img.width, coverSize / img.height);
+      const dw = img.width * scale;
+      const dh = img.height * scale;
+      ctx.drawImage(img, coverX - (dw - coverSize) / 2, coverY - (dh - coverSize) / 2, dw, dh);
+      ctx.restore();
+    } catch {
+      // Best-effort, same precedent as everywhere else cover art is shown —
+      // a failed load just means no cover on the card, not a failed export.
+    }
+  }
+
+  const titleY = coverY + coverSize + 56;
+  ctx.fillStyle = '#ececf2';
+  ctx.font = '600 40px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText(truncateForCanvas(ctx, book.title, W - pad * 2), W / 2, titleY);
+
+  const authorY = titleY + 44;
+  ctx.fillStyle = '#9a9ab0';
+  ctx.font = '28px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText(book.author || '', W / 2, authorY);
+
+  // The quote is the one element whose length varies a lot (a short one-line
+  // pull vs. several sentences), so it's the one centered within its own
+  // space rather than just stacked top-down — otherwise a short quote leaves
+  // a large, unbalanced-looking gap above the footer.
+  const footerY = H - 90;
+  const quoteFont = 'italic 500 38px "Segoe UI", system-ui, sans-serif';
+  ctx.font = quoteFont;
+  const lineHeight = 52;
+  const quoteLines = quoteText ? wrapCanvasText(ctx, `“${quoteText}”`, W - pad * 2).slice(0, 8) : [];
+
+  if (quoteLines.length) {
+    const spaceTop = authorY + 40;
+    const spaceBottom = footerY - 60;
+    const blockHeight = quoteLines.length * lineHeight;
+    let y = spaceTop + Math.max(0, (spaceBottom - spaceTop - blockHeight) / 2) + lineHeight * 0.7;
+    ctx.fillStyle = '#ececf2';
+    for (const line of quoteLines) {
+      ctx.fillText(line, W / 2, y);
+      y += lineHeight;
+    }
+  }
+
+  ctx.fillStyle = '#7c6cf5';
+  ctx.font = '600 26px "Segoe UI", system-ui, sans-serif';
+  const chapterIdx = book.chapters?.length ? chapterAt(book, start) : -1;
+  const chapterLabel = chapterIdx >= 0 ? book.chapters[chapterIdx].title : null;
+  ctx.fillText([formatTime(start), chapterLabel].filter(Boolean).join(' · '), W / 2, footerY);
+
+  ctx.fillStyle = '#6a6a80';
+  ctx.font = '20px "Segoe UI", system-ui, sans-serif';
+  ctx.fillText('Midnight Athenaeum', W / 2, H - 40);
+
+  return canvas.toDataURL('image/png');
+}
+
+let cardRedrawTimer = null;
+function scheduleCardRedraw() {
+  clearTimeout(cardRedrawTimer);
+  cardRedrawTimer = setTimeout(() => {
+    if (!clipState) return;
+    const { start } = currentClipRange();
+    drawShareCard(clipState.book, el.clipQuote.value.trim(), start);
+  }, 120);
+}
+
+function showClipTab(tab) {
+  const isAudio = tab === 'audio';
+  el.clipTabAudio.classList.toggle('active', isAudio);
+  el.clipTabImage.classList.toggle('active', !isAudio);
+  el.clipTabAudio.setAttribute('aria-selected', String(isAudio));
+  el.clipTabImage.setAttribute('aria-selected', String(!isAudio));
+  el.clipAudioPane.classList.toggle('hidden', !isAudio);
+  el.clipImagePane.classList.toggle('hidden', isAudio);
+  if (!isAudio) scheduleCardRedraw();
+}
+
+async function openClipModal(book, bookmark) {
+  const duration = book.duration || (bookmark.position + CLIP_WINDOW_SECONDS);
+  const windowStart = Math.max(0, bookmark.position - CLIP_WINDOW_SECONDS);
+  const windowEnd = Math.min(duration, bookmark.position + CLIP_WINDOW_SECONDS);
+  clipState = { book, bookmark, windowStart, windowEnd };
+
+  const windowLength = Math.max(1, Math.round(windowEnd - windowStart));
+  el.clipStartSlider.min = '0'; el.clipStartSlider.max = String(windowLength);
+  el.clipEndSlider.min = '0'; el.clipEndSlider.max = String(windowLength);
+
+  const defaultStart = Math.max(windowStart, bookmark.position - CLIP_DEFAULT_PREROLL);
+  const defaultEnd = Math.min(windowEnd, bookmark.position + CLIP_DEFAULT_POSTROLL);
+  el.clipStartSlider.value = String(clipGlobalToSlider(defaultStart));
+  el.clipEndSlider.value = String(clipGlobalToSlider(defaultEnd));
+  updateClipLabels();
+
+  el.clipQuote.value = '';
+  el.clipStatus.textContent = '';
+  showClipTab('audio');
+  el.clipModal.classList.remove('hidden');
+
+  // Auto-fill from a transcript, if one exists — best-effort, doesn't block
+  // the modal from being usable while it loads.
+  const { start, end } = currentClipRange();
+  const quote = await autoQuoteFor(book.id, start, end);
+  if (clipState?.bookmark.id === bookmark.id && !el.clipQuote.value) {
+    el.clipQuote.value = quote;
+    if (!el.clipImagePane.classList.contains('hidden')) scheduleCardRedraw();
+  }
+}
+
+function closeClipModal() {
+  el.clipModal.classList.add('hidden');
+  clipState = null;
+}
+
+function onClipSliderInput(e) {
+  const startVal = Number(el.clipStartSlider.value);
+  const endVal = Number(el.clipEndSlider.value);
+  if (startVal >= endVal) {
+    if (e.target === el.clipStartSlider) el.clipEndSlider.value = String(startVal + 1);
+    else el.clipStartSlider.value = String(Math.max(0, endVal - 1));
+  }
+  updateClipLabels();
+  if (!el.clipImagePane.classList.contains('hidden')) scheduleCardRedraw();
+}
+el.clipStartSlider.addEventListener('input', onClipSliderInput);
+el.clipEndSlider.addEventListener('input', onClipSliderInput);
+el.clipQuote.addEventListener('input', scheduleCardRedraw);
+
+el.clipTabAudio.addEventListener('click', () => showClipTab('audio'));
+el.clipTabImage.addEventListener('click', () => showClipTab('image'));
+
+el.clipModalClose.addEventListener('click', closeClipModal);
+el.clipModal.addEventListener('click', (e) => { if (e.target === el.clipModal) closeClipModal(); });
+el.clipModal.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.stopPropagation(); closeClipModal(); }
+});
+
+el.clipExportAudioBtn.addEventListener('click', async () => {
+  if (!clipState) return;
+  const { start, end } = currentClipRange();
+  if (end - start < 1) { showToast('Pick a longer span to export.'); return; }
+
+  el.clipExportAudioBtn.disabled = true;
+  el.clipStatus.textContent = 'Exporting audio clip…';
+  const suggestedName = `${clipState.book.title} - ${clipState.bookmark.label || formatTime(start)}`;
+  const result = await window.api.exportAudioClip({ bookId: clipState.book.id, start, end, suggestedName });
+  el.clipExportAudioBtn.disabled = false;
+  el.clipStatus.textContent = '';
+
+  if (result.canceled) return;
+  if (!result.ok) { showToast(result.error || 'Could not export the clip.'); return; }
+  showToast(`Clip saved to ${result.path}`);
+});
+
+el.clipExportImageBtn.addEventListener('click', async () => {
+  if (!clipState) return;
+  const { start } = currentClipRange();
+
+  el.clipExportImageBtn.disabled = true;
+  el.clipStatus.textContent = 'Exporting share card…';
+  const dataUrl = await drawShareCard(clipState.book, el.clipQuote.value.trim(), start);
+  const suggestedName = `${clipState.book.title} - quote`;
+  const result = await window.api.exportShareCard({ dataUrl, suggestedName });
+  el.clipExportImageBtn.disabled = false;
+  el.clipStatus.textContent = '';
+
+  if (result.canceled) return;
+  if (!result.ok) { showToast(result.error || 'Could not export the card.'); return; }
+  showToast(`Card saved to ${result.path}`);
+});
 
 /* ---------------- player ---------------- */
 

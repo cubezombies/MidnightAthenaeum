@@ -220,7 +220,7 @@ input[type="search"]:focus { border-color: var(--accent); }
   flex-shrink: 0;
 }
 .play-btn .icon { width: 20px; height: 20px; vertical-align: -5px; }
-.folder-remove .icon, .bookmark-del .icon { width: 13px; height: 13px; vertical-align: -2px; }
+.folder-remove .icon, .bookmark-del .icon, .bookmark-clip .icon { width: 13px; height: 13px; vertical-align: -2px; }
 .drop-overlay-box .icon { width: 22px; height: 22px; vertical-align: -5px; margin-right: 4px; }
 .card-art .placeholder .icon, .series-cover.placeholder .icon { width: 34px; height: 34px; }
 
@@ -487,10 +487,11 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 .bookmark-note.empty:not(:focus) { color: var(--faint); font-style: italic; }
 
 .bookmark-actions { display: flex; gap: 4px; opacity: 0; transition: opacity .12s; flex-shrink: 0; }
-.bookmark-del {
+.bookmark-clip, .bookmark-del {
   background: transparent; border: none; color: var(--muted); cursor: pointer;
   padding: 3px 7px; border-radius: 6px; font-size: 14px;
 }
+.bookmark-clip:hover { background: var(--accent-soft); color: var(--accent); }
 .bookmark-del:hover { background: var(--danger-bg); color: var(--danger-text); }
 
 .no-bookmarks { color: var(--muted); padding: 8px 12px 4px; font-size: 13px; }
@@ -739,6 +740,44 @@ body.playing .toast { bottom: calc(var(--player-h) + 20px); }
 .metadata-preview-body { min-width: 0; flex: 1; }
 .metadata-preview-body h4 { margin: 0 0 4px; font-size: 15px; }
 .metadata-preview-body .desc { max-height: 120px; }
+
+/* ---------- Bookmark clips: export & share cards ---------- */
+.clip-modal { width: 440px; }
+
+.clip-range { display: flex; flex-direction: column; gap: 6px; }
+.clip-range-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.clip-range-row > span:first-child { width: 36px; flex-shrink: 0; }
+.clip-range-row input[type="range"] { flex: 1; }
+.clip-time-label {
+  width: 56px; flex-shrink: 0; text-align: right;
+  font-variant-numeric: tabular-nums; color: var(--text);
+}
+#clipDuration { margin: 0; text-align: center; }
+
+.clip-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--line); }
+.clip-tab {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  padding: 8px 4px; font: inherit; font-size: 13px;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.clip-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.clip-pane { display: flex; flex-direction: column; gap: 10px; }
+
+.clip-quote-label { font-size: 12px; color: var(--muted); }
+.clip-quote {
+  background: var(--bg-elev-2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13px; resize: vertical;
+  width: 100%;
+}
+.clip-quote:focus { border-color: var(--accent); outline: none; }
+
+.clip-card-canvas {
+  width: 100%; max-width: 260px; aspect-ratio: 1 / 1; align-self: center;
+  border-radius: 12px; border: 1px solid var(--line); background: #12121a;
+}
+
+.clip-status { min-height: 16px; text-align: center; }
 
 /* ---------- Transcription & transcript search ---------- */
 .transcribe-status { margin-top: 8px; }

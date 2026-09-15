@@ -8,6 +8,16 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-15
+### Added
+- **Bookmark clips: export & share cards** — a new "Clip" button on each
+  bookmark row opens a small editor: two sliders pick a span around the
+  bookmark, then export either a short MP3 you can share anywhere or a
+  square image card (cover + title/author + quote + timestamp) ready for
+  social. A span crossing a track boundary is handled correctly rather than
+  cut off. The quote auto-fills from a transcript when the book has one
+  (fully editable either way).
+
 ## [0.18.0] - 2026-09-11
 ### Added
 - **Per-chapter artwork** — a small number of enhanced audiobooks embed a

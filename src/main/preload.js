@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('api', {
   updateBookmark: (payload) => ipcRenderer.invoke('bookmarks:update', payload),
   removeBookmark: (payload) => ipcRenderer.invoke('bookmarks:remove', payload),
   restoreBookmark: (payload) => ipcRenderer.invoke('bookmarks:restore', payload),
+  exportAudioClip: (payload) => ipcRenderer.invoke('clip:exportAudio', payload),
+  exportShareCard: (payload) => ipcRenderer.invoke('clip:exportImage', payload),
   saveNormalization: (payload) => ipcRenderer.invoke('normalization:save', payload),
   revealDataFolder: () => ipcRenderer.invoke('app:revealDataFolder'),
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),

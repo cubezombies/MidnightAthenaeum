@@ -15,19 +15,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 
-let ffmpegPath = null;
-try {
-  ffmpegPath = require('ffmpeg-static');
-  // Same asar-unpack rewrite transcribe.js needs: require()/dlopen() reads
-  // transparently through the virtual app.asar path, but child_process.spawn()
-  // does not -- it needs a real path and fails with ENOENT on the virtual
-  // one once packaged. A no-op in dev (no "app.asar" segment to replace).
-  if (ffmpegPath) {
-    ffmpegPath = ffmpegPath.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-  }
-} catch (err) {
-  console.warn('[audible] ffmpeg-static not available:', err.message);
-}
+const { ffmpegPath } = require('./ffmpeg-path');
 
 function isAvailable() {
   return Boolean(ffmpegPath);

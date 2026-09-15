@@ -33,23 +33,12 @@ const MODEL_NAME = 'ggml-base.en.bin';
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_NAME}`;
 const MODEL_PATH = path.join(WHISPER_MODEL_DIR, MODEL_NAME);
 
+const { ffmpegPath } = require('./ffmpeg-path');
+
 let whisperTranscribe = null;
-let ffmpegPath = null;
 try {
   // eslint-disable-next-line global-require
   ({ transcribe: whisperTranscribe } = require('@kutalia/whisper-node-addon'));
-  // eslint-disable-next-line global-require
-  ffmpegPath = require('ffmpeg-static');
-  // In a packaged app, require()/dlopen() transparently reads unpacked
-  // files through the virtual app.asar path (confirmed working for the
-  // whisper.node addon itself), but child_process.spawn() does NOT — it
-  // needs a real path and fails with ENOENT on the virtual one. Verified
-  // directly against a real packaged build rather than assumed: this
-  // rewrite is required for ffmpeg to actually run once packaged, and is a
-  // no-op in dev (no "app.asar" segment to replace).
-  if (ffmpegPath) {
-    ffmpegPath = ffmpegPath.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-  }
 } catch (err) {
   console.warn('[transcribe] native dependencies not available:', err.message);
 }
