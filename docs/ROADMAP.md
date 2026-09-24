@@ -187,6 +187,33 @@ Already shipped, so it is not repeated in the lists below:
   cursor, dismisses on outside-click/Escape, and sends the correct book id
   and files-or-not flag through the same deletion path. Shipped 2026-07-29.
 
+- **Audible `.aax` decryption** — File → Decrypt Audible file (.aax)…, plus a
+  batch offer on adding a folder / an explicit rescan (Tier 3 #7, shipped,
+  AAX only). v0.16.0, 2026-07-31.
+- **Gapless multi-track playback** — a hidden second `<audio>` preloads the
+  next track so file boundaries don't stall (Tier 3 #4). v0.17.0, 2026-09-11.
+- **Per-chapter artwork** — Apple chapter-artwork tracks shown in the chapter
+  list, mini-player and OS media flyout (Tier 3 #5). v0.18.0, 2026-09-11.
+- **Bookmark clips & share cards** — export a span around a bookmark as MP3 or
+  a cover/quote image card (Tier 2 #4). v0.19.0, 2026-09-15.
+- **Full-cast / GraphicAudio productions** — `(1 of 2)` sibling folders merged
+  into one book, "Cast:" instead of "Narrated by", a badge (Tier 3 #6).
+  v0.20.0, 2026-09-15.
+- **Full cast & genre filters** — a Full cast tab and a Genre dropdown built
+  from cleaned genre tags (Tier 3 #6 follow-on). v0.21.0/0.21.1, 2026-09-15.
+- **Reliability pass** — cancellable scans, a Read problems filter + retry for
+  unreadable files, a weekly automatic deep scan, and an unexpected-exit
+  notice offering `diagnostic.log` (Reliability #2–#5). v0.22.0, 2026-09-24.
+- **Waveform seek bar** — per-book loudness waveform with chapter ticks and a
+  hover/drag time preview (Performance #7). v0.23.0, 2026-09-24.
+- **Security maintenance** — Electron 43.7, music-metadata 11.15, `npm audit`
+  clean, third-party licenses (FFmpeg GPL v3) documented (see Security).
+  v0.23.1, 2026-09-24.
+- **Distribution** — in the Windows Package Manager as
+  `cubezombies.MidnightAthenaeum` since 0.10.0 (2026-07-23); later versions
+  were mostly submitted by a third-party auto-submit bot, 0.23.x by hand (see
+  Distribution & tooling #2).
+
 Known gaps carried forward as motivation: series volumes can share a display
 title, box sets stay whole, and merged `.m4b` parts collapse to one chapter each.
 
@@ -255,10 +282,12 @@ On resume, rewinds a few seconds scaled to how long you were paused (0 under 30s
 3s, 10s, up to 20s after an hour+). Kept separate from the sleep timer's fixed
 30s resume-rewind.
 
-### 7. Library organization: sort, filter, series & collections — **shipped** ✅
+### 7. Library organization: sort, filter, series & collections — **shipped** ✅ (collections not built)
 Filter tabs, **sort** (author / title / recently added / recently played /
 longest / shortest), and **series grouping** (collapse a series' volumes into one
-tile, with a drill-in view) all ship. **Still open:** better series coverage —
+tile, with a drill-in view) all ship. User-defined **collections** (the other
+half of this item's title) were never built — the 2026-09-24 review found no
+trace of them in the code; picked up as New candidates #6. **Still open:** better series coverage —
 title-parsing groups ~30% of books (~360 series); the misses are un-numbered
 series (Dune's prequels, standalone novellas) and folder-numbered books whose
 title omits the series — those want the sidecar/online metadata below.
@@ -704,6 +733,15 @@ title parser misses (Dune, folder-numbered books). Needs a re-scan to apply.
 Many mp3-folder books have no real chapters. Detect long silences to synthesize
 chapter breaks, or (better) reuse the Whisper transcript to place semantically
 sensible marks. Shares the silence-detection engine with skip-silence.
+
+**New evidence (2026-09-24):** the waveform's RMS levels on a real 16-chapter
+m4b show a clear loudness dip under every chapter tick — chapter breaks in
+mastered audiobooks really are distinguishable silences. The cached waveform
+is too coarse to place a mark (1000 points ≈ 9s each on a 2.5h book), but it
+is a free way to shortlist candidate gaps, which an `ffmpeg -af silencedetect`
+pass over just those windows could then pin down to the second — far cheaper
+than scanning the whole book. The decode pipeline (`waveform.js`) is reusable
+as-is.
 
 ### 4. Gapless multi-track playback — **shipped** ✅
 A second `<audio>` element (`shadowEl` in `app.js`) preloads the next track ahead
@@ -1233,7 +1271,9 @@ listed against the 34.x line (ASAR integrity bypass, several use-after-frees,
 IPC response spoofing, HTTP response-header injection in custom protocol
 handlers, among others). Two of those were directly reachable here: the app
 registers a custom protocol (`ab-media://`) and ships as an asar.
-`npm audit --omit=dev` now reports **0 vulnerabilities**.
+`npm audit --omit=dev` now reports **0 vulnerabilities**. Since moved on to
+**43.7.0** within the same major (v0.23.1; native-module ABI still 148, so no
+rebuild).
 
 **The ABI fear that justified deferring this was wrong.** Both native modules
 (`@vscode/sqlite3` and `@kutalia/whisper-node-addon`) build against
@@ -1258,7 +1298,8 @@ checked against the APIs this app actually calls): Electron 43 makes file
 dialogs default to the Downloads folder. Three of this app's five dialogs set
 `defaultPath` explicitly and are unaffected; the library-folder picker and
 the ebook picker don't, so they now open at Downloads. Cosmetic, but both
-would be better with a sensible default — worth a follow-up. Nothing else in
+would be better with a sensible default — still open as of 2026-09-24 (the
+`.aax` picker has the same gap); see New candidates #1. Nothing else in
 35→43 touches the APIs in use (`protocol.handle`, `nativeImage`,
 `setJumpList`, `setWindowOpenHandler`, `contextBridge`, `webUtils`,
 `ipcMain.handle`, sandbox/contextIsolation settings all unchanged).
@@ -1330,35 +1371,174 @@ bitmap writes) that `nativeImage` cannot do — it resizes and re-encodes, it
 does not draw. That is fine: both are build-time scripts, run by hand,
 operating on a checked-in logo, and their outputs (`build/icon.ico`,
 `build/media-icons/*`) are committed. They are not an attack surface and they
-are not in the shipped app.
+are not in the shipped app. They (and `scripts/seed-demo-library.cjs`) were
+later ported to **jimp 1.6.1** (PR #9), which clears the `file-type` advisory
+from the dev tree too; every icon regenerated byte-for-byte identical and all
+32 demo covers pixel-identical.
+
+### 2026-09-24 pass: audit, lint, licenses ✅
+- **Dependencies:** `npm audit` (full tree, dev included) is at **0**. The
+  last findings were all build-time: `brace-expansion` (high, DoS) via
+  electron-builder's asar tooling, patched in PR #10; the `jimp` chain above.
+  GitHub's Dependabot and secret-scanning feeds had no open alerts.
+- **Lint:** no linter is configured in the repo. A one-off run of ESLint's
+  recommended rules over `src/` and `scripts/` found three real items — a
+  `return` inside `runScan`'s `finally` (restructured), an unused constant
+  (removed), and a deliberate control-character regex in `reorganize.js`
+  (kept). Making this permanent is Distribution & tooling #3.
+- **Licenses:** every shipped npm package is permissive (MIT/ISC/Apache/BSD/
+  BlueOak/0BSD/PSF) except the bundled **`ffmpeg.exe`, a GPL v3 build**. It
+  runs as a separate process, so the app's own MIT license is unaffected, and
+  its GPL text + exact source pointer already ship next to it — but nothing
+  said so. The README now has a *Third-party software and licenses* section,
+  and its "every line in the installer is in this repo" claim was corrected
+  (prebuilt Electron/FFmpeg/whisper/SQLite binaries are not).
+- **Not in place:** CodeQL code scanning (no analysis configured) — see
+  Distribution & tooling #3.
+- **Local build environment:** the dev machine turned out unable to compile
+  `@vscode/sqlite3` (Visual Studio present, its Installer — and so
+  `vswhere.exe`, which `node-gyp` uses to find it — missing). Local packs had
+  only been passing because electron-builder found an old compiled binary
+  already in `node_modules` and copied it; a clean `npm ci` removes it. CI is
+  unaffected (GitHub's runners have a working VS). The README's *Running it*
+  now lists the prerequisite. Note also that `npm` 11 only *warns* about the
+  `allowScripts` allowlist in `package.json`, so a fresh install still runs
+  sqlite's `node-gyp` step.
+
+---
+
+## Distribution & tooling
+
+Added 2026-09-24. The app's own code got plenty of verification this cycle;
+the gaps are in the machinery around it.
+
+### 1. CI on pull requests — **M**
+The only workflow is the tag-triggered release build, so pull requests —
+including Dependabot's — arrive with no checks at all (PRs #8/#9 showed
+"no checks"; each had to be tested by hand before merging). Add a
+`pull_request` workflow on `windows-latest`: `npm ci`, `node --check` over
+`src/`, lint (#3), and a packaged smoke test. `scripts/test-unpack.cjs` can't
+run in CI as written — it `require`s Playwright from a hard-coded local npx
+cache path (`D:\npm\cache\_npx\…`) — so it needs Playwright as a real
+devDependency first.
+
+### 2. Automate winget submissions — **S**
+The package exists (`cubezombies.MidnightAthenaeum`), but updates have come
+from a third-party auto-submit bot (it submitted 0.16.2, 0.17.0, 0.18.0 and
+0.21.1, and skipped 0.19.0, 0.20.0, 0.21.0 and 0.22.0) and, for 0.23.x, by
+hand. A release-workflow step
+using a winget-submission action (e.g. `vedantmgoyal9/winget-releaser`) with a
+token for the `cubezombies/winget-pkgs` fork would submit every release
+automatically. Note the fork's `master` can't be synced with the default
+`gh` token scopes (upstream changes workflow files; needs the `workflow`
+scope) — branching from the fork's own `master` works fine for manifest-only
+PRs.
+
+### 3. Permanent lint + code scanning — **S**
+Commit the ESLint flat config used in the 2026-09-24 pass (recommended rules,
+node globals for `src/main`/`scripts`, browser globals for the renderer) and
+run it in #1; drop the ~20 stale `eslint-disable` comments for rules that
+config doesn't enable. Enable CodeQL's default setup for JavaScript (free for
+public repos) — the one security feed not currently on.
+
+### 4. Keep the end-to-end checks — **M**
+Every feature in v0.22–v0.23 was verified by Playwright-over-CDP scripts
+driving the real app (read-problems + retry against an ACL-denied file, scan
+cancel against the real library, weekly deep scan with a backdated clock,
+all three unclean-exit paths, the waveform on a real audiobook and a
+two-track fixture). They lived in a scratch folder, not the repo, so none of
+it is re-runnable. Move them into `scripts/e2e/` with their fixture
+generators (ffmpeg-generated tones, the ACL trick) and run the fast ones in #1.
+
+### 5. Code signing — **M** (plus a running cost)
+The unsigned installer triggers SmartScreen's "unrecognized publisher"
+warning on every download, which the README has to explain away. Options:
+Azure Trusted Signing (low monthly cost, identity validation required) or
+SignPath Foundation (free for open-source projects, application-based). A
+decision for the maintainer rather than an engineering task — electron-builder
+supports both.
+
+---
+
+## New candidates (2026-09-24 review)
+
+Grounded in a pass over the current code; none of these are started.
+
+### 1. File pickers open in Downloads — **S**
+Electron 43 defaults dialogs to Downloads, and three pickers still set no
+`defaultPath`: add library folder, pair an ebook, and decrypt `.aax`. Sensible
+defaults: the first library folder (or Music) for add-folder, the open book's
+own folder for the ebook picker.
+
+### 2. Shortcuts stop working after clicking the seek bar — **S**
+The global `keydown` handler ignores every event whose target is an
+`input`/`select`/`textarea` (so typing in search doesn't trigger shortcuts) —
+but the seek bar is an `<input type="range">`, so once it's clicked, Space,
+`B`, `S`, `N`, `V` and `T` do nothing until focus moves. Exempt range inputs
+from that check (their native arrow-key seeking can stay), or return focus to
+the page after a seek. Documented as a known quirk in the README until fixed.
+
+### 3. Waveforms for likely-next books — **S**
+A waveform only appears the first time a book is opened (5–15s for a typical
+book). Queueing the books on the Continue-listening shelf in the background,
+at idle, would mean the books you're most likely to resume already have one.
+`waveform.js`'s one-at-a-time queue already provides the throttling.
+
+### 4. Chapter progress in the chapter list — **S**
+The chapter list highlights the current chapter but doesn't distinguish
+chapters already listened to. Dim / tick everything before the saved
+position; for long books (*Wind and Truth*'s 212 chapters) it shows at a
+glance how far through you are.
+
+### 5. Export bookmarks & notes — **S**
+Bookmarks with notes are one of the app's richer data sets but can only be
+viewed in-app. Export a book's bookmarks, notes and clip quotes as Markdown or
+CSV — useful for book clubs, reviews, or study.
+
+### 6. User collections / shelves — **M**
+Named, hand-picked lists ("Book club", "Road trip", "Re-listen"), shown as an
+extra filter entry — the unbuilt half of Tier 1 #7. Stored per book id, so it
+must join the existing id-keyed bookkeeping: `remapIdKeyedStores` (reorganize
+and its undo), the delete-book purge, backup/restore, and the data-location
+move list (`ownDataEntries`).
+
+### 7. Compact mini-player window — **M**
+A small always-on-top window with cover, chapter, transport and the waveform,
+for listening while working in other apps — common in desktop players, absent
+here. Audio lives in the main window's renderer, so the mini-player would be a
+remote control over IPC (like the taskbar thumb buttons already are) rather
+than a second player.
 
 ---
 
 ## Suggested sequencing
 
 Everything in the original sequencing plan has shipped — all of Tier 1 and
-Tier 2. What follows is what is actually left, ordered by value against
-effort:
+Tier 2, Reliability #2–#5, and the waveform. What's left, ordered by value
+against effort:
 
-1. **Reliability #2–#5** (surface parse failures, cancel a scan, occasional
-   deep scan, flag unexpected exits) — all small, all address things that are
-   currently silent. Cheap trust wins.
-2. **Incremental scan via file watcher** (Performance #4) — with rescans now
+1. **New candidates #1 and #2** (dialog defaults, shortcuts after seeking) —
+   small, user-visible papercuts.
+2. **CI on pull requests + lint + CodeQL + keeping the e2e checks**
+   (Distribution & tooling #1, #3, #4) — this cycle's Dependabot PRs arrived
+   with zero checks; this is what makes dependency updates safe to merge
+   without a manual test session each time.
+3. **Automate winget submissions** (Distribution & tooling #2).
+4. **Incremental scan via file watcher** (Performance #4) — with rescans
    ~3s, the remaining annoyance is having to trigger one at all.
-3. **Sidecar metadata** (Tier 3 #2) — narrator + description from `.nfo`, and
-   `series` from co-located `.abs`/`.opf`, fills the gaps title parsing
-   can't reach. Best remaining metadata win for this library specifically.
-   (Full-cast/graphic audio productions, Tier 3 #6, shipped — was sequenced
-   before this since both touch how a book's identity is derived.)
-4. **Query-per-view** (Performance #1, the open half) — the real ceiling for
-   very large libraries, and a prerequisite for instant server-side search.
-   Bigger: it changes the app's interaction model, so it wants its own pass.
-5. **Waveform / seek preview, auto-generated chapters** — genuine features
-   rather than fixes; pick by appetite. (Bookmark clips, Tier 2 #4, shipped.)
+5. **Sidecar metadata** (Tier 3 #2) — narrator + description from `.nfo`,
+   `series` from co-located `.abs`/`.opf`; the best remaining metadata win for
+   this library specifically.
+6. **Small features by appetite** — chapter progress, bookmark export,
+   waveform prefetch (New candidates #3–#5), then collections (#6).
+7. **Query-per-view** (Performance #1, the open half) — the real ceiling for
+   very large libraries; changes the interaction model, so its own pass.
+8. **Bigger features** — auto-generated chapters (Tier 3 #3, now with the
+   waveform as a cheap first pass), the mini-player (New candidates #7),
+   transcript-aligned read-along (Tier 2 #6's future work).
 
-Deliberately **not** sequenced: the Electron major bump and the `jimp`
-question (see Security). Both are real, both need their own verification
-pass, and neither is a good candidate for bundling into feature work.
+Code signing (Distribution & tooling #5) is a maintainer decision about cost
+rather than something to sequence.
 
 ---
 

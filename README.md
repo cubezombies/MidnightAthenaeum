@@ -29,6 +29,18 @@ are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## Running it
 
+Running from source needs:
+
+- **Node.js 22.12 or newer** (Electron 43's minimum; `package.json` enforces it).
+- **Visual Studio 2022 or newer with the "Desktop development with C++"
+  workload** (the free Build Tools edition is enough), including its
+  **Visual Studio Installer**. The library database module
+  (`@vscode/sqlite3`) is compiled on install, and `node-gyp` finds Visual
+  Studio through the Installer's `vswhere.exe` — a Visual Studio folder whose
+  Installer has gone missing fails with *"Could not find any Visual Studio
+  installation to use"* even though the compiler is there. Repair or
+  reinstall the Visual Studio Installer to fix that.
+
 ```powershell
 npm install
 npm start
@@ -64,6 +76,17 @@ books is never touched).
 The easiest way to install Midnight Athenaeum is to grab the prebuilt installer from
 [**Releases**](https://github.com/cubezombies/MidnightAthenaeum/releases/latest) —
 download `MidnightAthenaeum-Setup-<version>.exe` and run it. No admin rights needed.
+
+It's also in the Windows Package Manager:
+
+```powershell
+winget install cubezombies.MidnightAthenaeum
+```
+
+(`winget upgrade cubezombies.MidnightAthenaeum` later on.) New versions reach
+winget after Microsoft reviews each submission, so it can trail the Releases
+page by a day or two; the in-app **Check for Updates** always sees the newest
+release directly.
 
 It's a per-user NSIS installer — the standard default install location
 (`%LOCALAPPDATA%\Programs\Midnight Athenaeum`), no admin rights needed. It adds Start
@@ -167,8 +190,11 @@ npm run dist
 ```
 
 produces `dist\MidnightAthenaeum-Setup-<version>.exe` the same way the Release build
-does. `npm run pack` builds an unpacked `dist\win-unpacked\` folder instead,
-for a quick smoke test without going through the installer.
+does (same prerequisites as [Running it](#running-it)). `npm run pack` builds
+an unpacked `dist\win-unpacked\` folder instead, for a quick smoke test
+without going through the installer; `node scripts/test-unpack.cjs` builds
+that folder and launches the packaged app against the demo library as a
+regression check.
 
 ### Cutting a release
 
@@ -350,6 +376,7 @@ src/main/
   transcribe.js      whisper.cpp transcription + transcript search
   clip.js            bookmark clip (audio/image) export
   waveform.js        per-book seek-bar loudness waveform
+  ffmpeg-path.js     locates the bundled ffmpeg.exe (dev and packaged)
   duplicates.js      duplicate-book detection
   reorganize.js      reorganize-by-author moves + undo journal
   finished.js        finished-status tracking
@@ -536,7 +563,11 @@ take considerably more work for considerably less reliable results.
 | `N` | Toggle volume normalization |
 | `V` | Toggle Voice Boost EQ |
 | `T` | Open the sleep-timer menu |
-| `Esc` | Close the sleep menu, or go back to the library |
+| `Esc` | Close whatever is open (right-click menu, sleep menu, Folders panel, a toast), otherwise go back to the library |
+
+Shortcuts are ignored while a text box or other control has keyboard focus —
+including the seek bar after you've clicked it; click anywhere else (or press
+`Tab`) to hand the keys back to the shortcuts.
 
 ## Windows media integration
 
