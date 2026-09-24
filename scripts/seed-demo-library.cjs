@@ -12,7 +12,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const Jimp = require('jimp');
+const { Jimp, loadFont, HorizontalAlign, VerticalAlign } = require('jimp');
+const { SANS_16_WHITE, SANS_32_WHITE } = require('jimp/fonts');
 const { LibraryDb } = require('../src/main/db');
 
 const DATA_ROOT = process.argv[2] || path.join(__dirname, '..', 'demo-data');
@@ -130,7 +131,7 @@ function slugify(s) {
 async function makeCover(book, hue, outFull, outThumb) {
   const W = 480; const H = 720;
   const bg = hslToColor(hue, 42, 22);
-  const img = new Jimp(W, H, bg);
+  const img = new Jimp({ width: W, height: H, color: bg });
 
   // Bottom gradient so title/author text stays legible over any hue.
   img.scan(0, 0, W, H, (x, y, idx) => {
@@ -153,20 +154,25 @@ async function makeCover(book, hue, outFull, outThumb) {
     img.setPixelColor(borderColor, W - 20, y);
   }
 
-  const genreFont = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
-  const titleFont = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
-  const authorFont = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+  const genreFont = await loadFont(SANS_16_WHITE);
+  const titleFont = await loadFont(SANS_32_WHITE);
+  const authorFont = await loadFont(SANS_16_WHITE);
 
-  img.print(genreFont, 0, 48, { text: book.genre, alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER }, W);
-  img.print(
-    titleFont, 40, 280,
-    { text: book.title, alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER, alignmentY: Jimp.VERTICAL_ALIGN_MIDDLE },
-    W - 80, 220,
-  );
-  img.print(authorFont, 0, H - 90, { text: book.author.toUpperCase(), alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER }, W);
+  img.print({
+    font: genreFont, x: 0, y: 48, maxWidth: W,
+    text: { text: book.genre, alignmentX: HorizontalAlign.CENTER },
+  });
+  img.print({
+    font: titleFont, x: 40, y: 280, maxWidth: W - 80, maxHeight: 220,
+    text: { text: book.title, alignmentX: HorizontalAlign.CENTER, alignmentY: VerticalAlign.MIDDLE },
+  });
+  img.print({
+    font: authorFont, x: 0, y: H - 90, maxWidth: W,
+    text: { text: book.author.toUpperCase(), alignmentX: HorizontalAlign.CENTER },
+  });
 
-  await img.writeAsync(outFull);
-  await img.clone().resize(240, 360).writeAsync(outThumb);
+  await img.write(outFull);
+  await img.clone().resize({ w: 240, h: 360 }).write(outThumb);
 }
 
 async function main() {

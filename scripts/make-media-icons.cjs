@@ -12,7 +12,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const Jimp = require('jimp');
+const { Jimp, ResizeStrategy } = require('jimp');
 const pngToIco = require('png-to-ico').default;
 
 const ROOT = path.join(__dirname, '..');
@@ -35,14 +35,14 @@ function inRect(px, py, x0, y0, x1, y1) {
 }
 
 async function renderIcon(name, predicate) {
-  const img = await Jimp.create(CANVAS, CANVAS, 0x00000000);
+  const img = new Jimp({ width: CANVAS, height: CANVAS, color: 0x00000000 });
   img.scan(0, 0, CANVAS, CANVAS, (x, y, idx) => {
     if (predicate(x + 0.5, y + 0.5)) img.bitmap.data.writeUInt32BE(WHITE, idx);
   });
 
   const pngBuffers = [];
   for (const size of ICO_SIZES) {
-    const buf = await img.clone().resize(size, size, Jimp.RESIZE_BICUBIC).getBufferAsync(Jimp.MIME_PNG);
+    const buf = await img.clone().resize({ w: size, h: size, mode: ResizeStrategy.BICUBIC }).getBuffer('image/png');
     pngBuffers.push(buf);
   }
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -51,7 +51,7 @@ async function renderIcon(name, predicate) {
   console.log(`wrote ${dest}`);
 
   // For eyeballing the shape — same convention as make-icons.cjs's icon-preview.png.
-  await img.writeAsync(path.join(OUT_DIR, `${name}-preview.png`));
+  await img.write(path.join(OUT_DIR, `${name}-preview.png`));
 }
 
 async function main() {
