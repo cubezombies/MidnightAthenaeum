@@ -15,7 +15,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const Jimp = require('jimp');
+const { Jimp, ResizeStrategy } = require('jimp');
 const pngToIco = require('png-to-ico').default;
 
 const ROOT = path.join(__dirname, '..');
@@ -44,20 +44,20 @@ async function main() {
   y = Math.max(0, Math.min(y, H - side));
   console.log(`crop: x=${x} y=${y} side=${side}`);
 
-  const emblem = img.clone().crop(x, y, side, side);
+  const emblem = img.clone().crop({ x, y, w: side, h: side });
 
   // Mask to a circular badge at high resolution: everything outside the
   // inscribed circle goes transparent, with a 1px anti-aliased edge. Doing this
   // once at 1024 and then downscaling gives every icon size a smooth circle.
-  const master = emblem.clone().resize(1024, 1024, Jimp.RESIZE_BICUBIC);
+  const master = emblem.clone().resize({ w: 1024, h: 1024, mode: ResizeStrategy.BICUBIC });
   circularMask(master);
 
-  await master.clone().writeAsync(ICON_PNG);
+  await master.clone().write(ICON_PNG);
   console.log(`wrote ${ICON_PNG} (circular)`);
 
   const pngBuffers = [];
   for (const size of ICO_SIZES) {
-    const buf = await master.clone().resize(size, size, Jimp.RESIZE_BICUBIC).getBufferAsync(Jimp.MIME_PNG);
+    const buf = await master.clone().resize({ w: size, h: size, mode: ResizeStrategy.BICUBIC }).getBuffer('image/png');
     pngBuffers.push(buf);
   }
   fs.mkdirSync(path.dirname(ICO), { recursive: true });
