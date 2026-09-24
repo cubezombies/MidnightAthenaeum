@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('api', {
   getTranscribeStatus: (bookId) => ipcRenderer.invoke('transcribe:getStatus', bookId),
   getTranscript: (bookId) => ipcRenderer.invoke('transcript:get', bookId),
   deleteTranscript: (bookId) => ipcRenderer.invoke('transcript:delete', bookId),
+  ensureWaveform: (bookId) => ipcRenderer.invoke('waveform:ensure', bookId),
   findDuplicates: () => ipcRenderer.invoke('duplicates:find'),
   removeDuplicateBook: (bookId) => ipcRenderer.invoke('duplicates:remove', bookId),
   planReorganize: () => ipcRenderer.invoke('reorganize:plan'),

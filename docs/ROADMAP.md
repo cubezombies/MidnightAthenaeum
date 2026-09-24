@@ -1049,10 +1049,51 @@ longer terminate the app.
 process-level isolation (`utilityProcess`) rather than a thread sharing the
 main process.
 
-### 7. Waveform / seek preview — **M**
+### 7. Waveform / seek preview — **shipped** ✅
 Precompute a coarse waveform per book for a richer seek bar and instant scrub
 previews. Cache next to the cover. Nice-to-have that also visualizes chapter
 boundaries.
+
+**Shipped** (`src/main/waveform.js`): 1000 loudness points per book, cached
+as `waveforms/<bookId>.v1.levels` (1KB each). Design decisions, most of them
+forced by measurement:
+
+- **Lazy, not on scan.** Generated the first time a book is opened
+  (`waveform:ensure` from `openBook`), one book at a time via a deduped queue,
+  and delivered through the existing `library:booksUpdated` push. Doing it
+  during the scan would mean fully decoding every book up front — the
+  CPU-bound class of work #6 above says to keep off the scan path. Measured
+  ~6s per hour of audio (11s for a real 2.5h book).
+- **8kHz decode, not "coarse" 100Hz.** The first cut decoded straight to
+  100Hz to keep the data tiny, and every waveform came back near-silent:
+  resampling low-pass filters at the target Nyquist (50Hz), which removes
+  almost all speech energy before it can be measured (a 440Hz test tone came
+  back ~14x quieter than at its native rate). 8kHz keeps the speech band;
+  the reduction to 1000 points happens afterward, streamed per chunk so a
+  long book never sits in memory as PCM.
+- **Loudness (RMS in dB), not peak.** A peak waveform of a real mastered
+  audiobook was a flat band — every multi-second window contains at least
+  one near-full-scale syllable. RMS dips for pauses and chapter-break
+  silences (which visibly line up under the chapter ticks on a real book)
+  and rises for music and loud scenes. The renderer then stretches each
+  book between its own 2nd/98th percentile, since a mastered book spans only
+  a few dB. The version number in the cache filename exists so a future
+  change to what the bytes mean just misses and regenerates.
+- **Canvas behind the real `<input type="range">`**, whose track paint is
+  made transparent: keyboard/drag/accessibility behaviour is untouched. The
+  input is 32px tall so the whole waveform is the click/drag target, not
+  just a thin line. While dragging, the played/unplayed split follows the
+  drag target and a tooltip shows the time — the "instant scrub preview",
+  local and instant because the whole waveform is already in memory. Hover
+  shows the same tooltip without dragging. Chapter boundaries are thin ticks
+  drawn from the book's existing chapter list, not stored in the file.
+- **CSP:** this is the renderer's first `fetch()` (everything else goes
+  through IPC), so `connect-src 'self' ab-media:` was added — without it
+  the fetch was silently blocked by `default-src 'self'`.
+
+Verified in the real app on a real 2.5-hour, 16-chapter m4b (ticks aligned,
+hover time correct, both themes) and on a two-track fixture whose stored
+levels match each track's measured loudness in its proportional slice.
 
 ---
 

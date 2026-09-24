@@ -259,6 +259,7 @@ installer assumes for anyone else).
   userData\               Electron/Chromium profile and caches
   covers\                 extracted cover art
   covers-online\          covers fetched via the online metadata lookup
+  waveforms\              per-book seek-bar waveforms (tiny, regenerated if deleted)
   library.db              scanned library (SQLite; library.json, if present, is a legacy leftover)
   progress.json           per-book listening position, speed
   bookmarks.json          per-book bookmarks
@@ -345,6 +346,7 @@ src/main/
   ebook-pairing.js   audiobook <-> EPUB matching
   transcribe.js      whisper.cpp transcription + transcript search
   clip.js            bookmark clip (audio/image) export
+  waveform.js        per-book seek-bar loudness waveform
   duplicates.js      duplicate-book detection
   reorganize.js      reorganize-by-author moves + undo journal
   finished.js        finished-status tracking
@@ -566,6 +568,13 @@ further on top of whichever tab is active; the search box also matches genre
 text. Each book remembers its own **playback speed**, and resuming after a
 pause **rewinds a few seconds** (more the longer you were away) so you don't
 lose the thread.
+
+The seek bar shows the book's **loudness waveform** — quiet passages, pauses
+and loud scenes are visible at a glance — with small ticks marking each
+chapter boundary. Hover or drag anywhere on it to see the exact time you'd
+land on before letting go. The waveform is worked out once, in the
+background, the first time you open a book (a few seconds per hour of
+audio); until then the bar is a plain line and everything works as usual.
 
 The **Skip** dropdown in the player sets how far the ↺/↻ buttons and the plain
 `←`/`→` keys jump — 10/15/30/45/60s, 30 by default. The buttons' labels update to

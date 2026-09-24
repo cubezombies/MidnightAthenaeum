@@ -5,7 +5,7 @@ const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { protocol } = require('electron');
 
-const { COVER_CACHE, ONLINE_COVER_CACHE } = require('./paths');
+const { COVER_CACHE, ONLINE_COVER_CACHE, WAVEFORM_CACHE } = require('./paths');
 
 const SCHEME = 'ab-media';
 
@@ -21,6 +21,9 @@ const MIME_TYPES = {
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
   '.png': 'image/png',
+  // Raw Uint8 loudness bytes (see waveform.js) — not a real media type, just
+  // fetched as an ArrayBuffer by the renderer.
+  '.levels': 'application/octet-stream',
 };
 
 function encodePath(filePath) {
@@ -136,7 +139,7 @@ function registerMediaProtocol(getAllowedRoots, onRequest) {
       return new Response('Bad request', { status: 400 });
     }
 
-    const roots = [...getAllowedRoots(), COVER_CACHE, ONLINE_COVER_CACHE];
+    const roots = [...getAllowedRoots(), COVER_CACHE, ONLINE_COVER_CACHE, WAVEFORM_CACHE];
     if (!roots.some((root) => isInside(root, filePath))) {
       console.warn(`[media] blocked out-of-library request: ${filePath}`);
       onRequest?.({ error: 'forbidden', filePath, roots });

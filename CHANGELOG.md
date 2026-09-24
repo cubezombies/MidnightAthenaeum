@@ -8,6 +8,17 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-24
+### Added
+- **Waveform seek bar** — the seek bar now shows the book's loudness
+  waveform, so quiet passages, pauses and loud scenes are visible at a
+  glance, with small ticks marking each chapter boundary. Hover or drag
+  anywhere on it to see exactly what time you'd land on before letting go,
+  and the "played" colour follows your drag. The waveform is worked out once
+  in the background the first time you open a book (a few seconds per hour
+  of audio) and remembered after that; until it's ready the bar works
+  exactly as before. The seek bar is also taller now, so it's easier to hit.
+
 ## [0.22.0] - 2026-09-24
 ### Added
 - **Cancel a running scan** — while a scan is running, the Rescan button

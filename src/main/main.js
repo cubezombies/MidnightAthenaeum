@@ -8,7 +8,7 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 
 const {
   USER_DATA, LIBRARY_FILE, LIBRARY_DB_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
-  METADATA_FILE, DATA_ROOT, OS_DEFAULT_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, BACKUP_DIR,
+  METADATA_FILE, DATA_ROOT, OS_DEFAULT_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, WAVEFORM_CACHE, BACKUP_DIR,
   REORG_ID_MAP_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, AAX_ACTIVATION_FILE, AUDIBLE_SOURCES_FILE,
   AAX_OFFERED_FILE, SCAN_STATE_FILE, SESSION_FILE, setDataLocation, clearDataLocation,
 } = require('./paths');
@@ -222,6 +222,7 @@ const updater = require('./updater');
 const taskbar = require('./taskbar');
 const discord = require('./discord-presence');
 const transcriber = require('./transcribe');
+const waveformGen = require('./waveform');
 const duplicates = require('./duplicates');
 const reorganizer = require('./reorganize');
 const epub = require('./epub');
@@ -299,6 +300,7 @@ function remapIdKeyedStores(oldId, newId) {
     }
   }
   transcriber.renameTranscript(oldId, newId);
+  waveformGen.renameWaveform(oldId, newId);
 }
 
 // Set when the app is launched (or re-launched, via second-instance) from a
@@ -425,6 +427,11 @@ function toClientBook(book) {
     tracks,
     coverUrl: cover ? mediaUrl(cover) : null,
     coverThumbUrl: coverThumb ? mediaUrl(coverThumb) : null,
+    // A coarse amplitude waveform for the seek bar (see waveform.js) — null
+    // until it's been generated, which happens lazily on first open
+    // (waveform:ensure), not here. Same cache-file-existence-check shape as
+    // cover/coverThumb above.
+    waveformUrl: waveformGen.hasWaveform(book.id) ? mediaUrl(waveformGen.waveformPath(book.id)) : null,
     mtimeMs: bookMtime(book),
     fileName: path.basename(book.tracks[0]?.filePath ?? ''),
     trackCount: book.tracks.length,
@@ -927,7 +934,7 @@ function ownDataEntries() {
   // silently stranded ebook-pairings.json at the old location.
   return [
     LIBRARY_DB_FILE, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
-    METADATA_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, COVER_CACHE, ONLINE_COVER_CACHE,
+    METADATA_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, COVER_CACHE, ONLINE_COVER_CACHE, WAVEFORM_CACHE,
   ].filter((p) => fs.existsSync(p));
 }
 
@@ -2126,6 +2133,31 @@ function registerIpc() {
   });
 
   /**
+   * A coarse per-book waveform for the seek bar (see waveform.js) — silent
+   * and automatic, not opt-in like transcription: openBook() calls this for
+   * every book it opens. Returns immediately either way; { ready: true }
+   * means the cache already had it (toClientBook's waveformUrl is already
+   * current), { ready: false } means generation was queued (or is already
+   * running/queued from an earlier open) and the result reaches the
+   * renderer as a normal library:booksUpdated push once it's ready, the
+   * same channel background detail-fill already uses.
+   */
+  ipcMain.handle('waveform:ensure', (_event, bookId) => {
+    if (typeof bookId !== 'string') return { ok: false, ready: false };
+    if (waveformGen.hasWaveform(bookId)) return { ok: true, ready: true };
+
+    const raw = libraryStore.get().books.find((b) => b.id === bookId);
+    if (!raw) return { ok: false, ready: false };
+
+    waveformGen.requestWaveform(raw, (id, ok) => {
+      if (!ok) return;
+      const book = libraryStore.get().books.find((b) => b.id === id);
+      if (book) mainWindow?.webContents.send('library:booksUpdated', [toClientBook(book)]);
+    });
+    return { ok: true, ready: false };
+  });
+
+  /**
    * Returns the book's current ebook-pairing check if one exists (whether
    * matched, ambiguous, or none — any of those means it's already been
    * checked); otherwise computes and persists a fresh one. Unlike
@@ -2324,6 +2356,7 @@ function registerIpc() {
       // Best effort — a leftover cached cover file isn't worth surfacing an error for.
     }
     transcriber.deleteTranscript(bookId);
+    waveformGen.deleteWaveform(bookId);
 
     const next = currentState();
     mainWindow?.webContents.send('library:changed', next);

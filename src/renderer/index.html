@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' ab-media: https://covers.openlibrary.org; media-src 'self' ab-media:; style-src 'self'; script-src 'self';" />
+        content="default-src 'self'; img-src 'self' ab-media: https://covers.openlibrary.org; media-src 'self' ab-media:; connect-src 'self' ab-media:; style-src 'self'; script-src 'self';" />
   <title>Midnight Athenaeum</title>
   <script src="theme-init.js"></script>
   <link rel="stylesheet" href="styles.css" />
@@ -301,7 +301,11 @@
   <footer id="player" class="player hidden">
     <div class="player-seek">
       <span id="timeCurrent" class="time">0:00</span>
-      <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" />
+      <div id="seekWrap" class="seek-wrap">
+        <canvas id="seekWaveform" class="seek-waveform"></canvas>
+        <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" />
+        <div id="seekPreview" class="seek-preview hidden"></div>
+      </div>
       <span id="timeTotal" class="time">0:00</span>
     </div>
     <div class="player-row">
