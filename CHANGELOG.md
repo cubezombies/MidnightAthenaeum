@@ -8,6 +8,22 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-09-24
+### Security
+- Updated the underlying Electron runtime from 43.2 to 43.7, which picks up
+  the latest Chromium security fixes.
+- Updated the audio-tag reader (`music-metadata` 11.15), which hardens how it
+  handles malformed files — relevant because the app reads the tags of every
+  file in your library.
+- Patched build-toolchain advisories (`brace-expansion`, and `file-type` via
+  an upgraded `jimp` used only by the icon scripts). Neither was part of the
+  installed app. `npm audit` now reports no known vulnerabilities.
+
+### Changed
+- The README now lists the third-party software bundled in the installer and
+  its licenses — notably that the bundled FFmpeg is GPL v3, with its license
+  and source link included next to it in the install folder.
+
 ## [0.23.0] - 2026-09-24
 ### Added
 - **Waveform seek bar** — the seek bar now shows the book's loudness
