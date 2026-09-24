@@ -96,10 +96,13 @@ a signal that anything was found wrong with the installer, and there's no
 Microsoft/AV review behind it either way. Judge it on what you can actually
 check instead:
 
-- **The source is all here.** Every line that ends up in the installer is in
-  this repo — nothing closed-source, no separate "pro" build. `src/main/`
-  is the entire main-process/IPC surface; there's no code path that isn't in
-  this tree.
+- **The source is all here.** All of the app's own code is in this repo —
+  nothing closed-source, no separate "pro" build. `src/main/` is the entire
+  main-process/IPC surface; there's no app code path that isn't in this tree.
+  The installer also carries prebuilt open-source components (Electron,
+  FFmpeg, whisper.cpp, SQLite) pulled in from their own projects by the
+  public build below — see
+  [Third-party software and licenses](#third-party-software-and-licenses).
 - **The installer is built in public, not on anyone's laptop.** Every release
   is produced by [`.github/workflows/release.yml`](.github/workflows/release.yml),
   a GitHub Actions job that checks out this exact tagged commit on a clean
@@ -693,3 +696,32 @@ the book**. The volume fades gently over the last 20 seconds rather than cutting
 out. If you fall asleep, resuming rewinds 30 seconds so you don't lose your place,
 and **+5 minutes** extends (or restarts) the timer and picks playback back up.
 The duration countdown only runs while audio is playing, so pausing pauses it too.
+
+## Third-party software and licenses
+
+The MIT license in [LICENSE](LICENSE) covers Midnight Athenaeum's own code.
+The installer also includes other people's software, each under its own
+license:
+
+| Component | Used for | License |
+| --- | --- | --- |
+| [Electron](https://www.electronjs.org/) / Chromium | the app runtime | MIT; Chromium's component licenses |
+| [FFmpeg](https://ffmpeg.org/) (via [ffmpeg-static](https://github.com/eugeneware/ffmpeg-static)) | audio conversion for transcription, waveforms, clips, and `.aax` decryption | **GPL v3** (see below) |
+| [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (via [@kutalia/whisper-node-addon](https://www.npmjs.com/package/@kutalia/whisper-node-addon)) | offline transcription | MIT |
+| [SQLite](https://sqlite.org/) (via [@vscode/sqlite3](https://github.com/microsoft/vscode-node-sqlite3)) | the library database | public domain; binding BSD-3-Clause |
+| [music-metadata](https://github.com/Borewit/music-metadata) | reading audio tags | MIT |
+| [electron-updater](https://www.electron.build/auto-update), [@xhayper/discord-rpc](https://github.com/xhayper/discord-rpc) and their dependencies | updates, Discord presence | MIT / ISC / Apache-2.0 / BSD and similar permissive licenses |
+
+**About FFmpeg:** the bundled `ffmpeg.exe` is a GPL v3 build (gyan.dev's
+"essentials" build of FFmpeg 6.1.1). Midnight Athenaeum runs it as a separate
+program rather than linking it into its own code, which is why the app itself
+can stay MIT-licensed. The GPL v3 text and a pointer to the exact source
+(<https://github.com/FFmpeg/FFmpeg/commit/e38092ef93>, built as described at
+<https://www.gyan.dev/ffmpeg/builds/>) are installed right next to it, in
+`resources\app.asar.unpacked\node_modules\ffmpeg-static\`
+(`ffmpeg.exe.LICENSE`, `ffmpeg.exe.README`). Electron's and Chromium's
+license files (`LICENSE.electron.txt`, `LICENSES.chromium.html`) are in the
+install folder itself.
+
+The speech model transcription downloads on first use (`ggml-base.en`) comes
+from the whisper.cpp project and is MIT-licensed.

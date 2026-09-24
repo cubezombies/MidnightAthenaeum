@@ -1549,20 +1549,21 @@ async function runScan({ deep = false, explicit = false } = {}) {
     mainWindow?.webContents.send('library:changed', currentState());
     diag('scan: library:changed sent');
     refreshJumpList(); // a removed/renamed book could be sitting in the list
-    // A cancel means "stop hammering the drive" -- don't immediately start
-    // the background passes back up. They resume on the next scan.
-    if (cancelled) return;
     // Background phase 2, then ebook-pairing fill, then thumbnail backfill --
     // all fire-and-forget from here. The .catch() is not optional: this
     // chain is never awaited, so without it any rejection inside these
     // passes becomes an unhandled rejection, which terminates the main
     // process on Electron's Node. These are all best-effort background
     // passes -- a failure means some books stay unfilled until the next
-    // scan, which must never take the app down with it.
-    runDetailFill()
-      .then(() => runPairingFill())
-      .then(() => runThumbnailFill())
-      .catch((err) => console.error('[scan] background fill failed:', err));
+    // scan, which must never take the app down with it. Skipped after a
+    // cancel: that means "stop hammering the drive", so they wait for the
+    // next scan instead of immediately starting back up.
+    if (!cancelled) {
+      runDetailFill()
+        .then(() => runPairingFill())
+        .then(() => runThumbnailFill())
+        .catch((err) => console.error('[scan] background fill failed:', err));
+    }
 
     // Undecrypted-Audible-file detection only runs on an explicit rescan
     // (File > Rescan library), never a routine/automatic one — this is the

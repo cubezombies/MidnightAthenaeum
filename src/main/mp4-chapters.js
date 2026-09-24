@@ -20,7 +20,6 @@
 
 const { open } = require('node:fs/promises');
 
-const CONTAINER_BOXES = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl', 'udta', 'edts', 'tref']);
 const MAX_TABLE_BYTES = 8 * 1024 * 1024;
 
 class BoxReader {
