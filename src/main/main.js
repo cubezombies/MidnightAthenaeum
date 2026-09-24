@@ -8,9 +8,9 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 
 const {
   USER_DATA, LIBRARY_FILE, LIBRARY_DB_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
-  METADATA_FILE, DATA_ROOT, OS_DEFAULT_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, BACKUP_DIR,
+  METADATA_FILE, DATA_ROOT, OS_DEFAULT_ROOT, COVER_CACHE, ONLINE_COVER_CACHE, WAVEFORM_CACHE, BACKUP_DIR,
   REORG_ID_MAP_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, AAX_ACTIVATION_FILE, AUDIBLE_SOURCES_FILE,
-  AAX_OFFERED_FILE, setDataLocation, clearDataLocation,
+  AAX_OFFERED_FILE, SCAN_STATE_FILE, SESSION_FILE, setDataLocation, clearDataLocation,
 } = require('./paths');
 const { isFinishedByPosition } = require('./finished');
 
@@ -109,16 +109,80 @@ if (DIAG_VERBOSE) {
   setInterval(() => diag(`tick [${memLine()}] mediaServed=${Math.round(mediaBytesServed / 1024 / 1024)}MB/${mediaRequestCount}req`), 1000).unref?.();
 }
 
+/*
+ * Unclean-shutdown detection. diagnostic.log records why a process died, but
+ * only helps someone who knows the file exists -- a user whose app "just
+ * closed itself" has nothing to attach to a bug report. So each launch leaves
+ * a session marker (SESSION_FILE) that only a clean quit removes: if the next
+ * launch finds one still there, the previous session ended some other way
+ * (crash, hang killed by Windows, force-closed) and checkPreviousSession()
+ * offers the log. Incidents the app survives -- chiefly the renderer dying
+ * while the main process lives on, which leaves a blank window the user then
+ * closes normally -- are recorded into the marker too, so a "clean" quit
+ * after one still gets reported.
+ */
+const SESSION_STARTED_AT = new Date().toISOString();
+const previousSession = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+  } catch {
+    return null; // no marker = last session quit cleanly (or first launch)
+  }
+})();
+const sessionIncidents = [];
+let appQuitting = false;
+
+function writeSessionMarker({ cleanExit = false } = {}) {
+  try {
+    fs.mkdirSync(path.dirname(SESSION_FILE), { recursive: true });
+    fs.writeFileSync(SESSION_FILE, JSON.stringify({
+      startedAt: SESSION_STARTED_AT,
+      version: app.getVersion(),
+      pid: process.pid,
+      cleanExit,
+      incidents: sessionIncidents,
+    }, null, 2));
+  } catch {
+    // Best effort, like diag(): this must never break a launch or a quit.
+  }
+}
+
+function noteSessionIncident(description) {
+  if (appQuitting) return; // processes going away during shutdown is expected
+  sessionIncidents.push(`${new Date().toISOString()} ${description}`);
+  writeSessionMarker();
+}
+
+/** Called once the app is genuinely shutting down on purpose (quit, or Windows ending the session). */
+function markSessionEndedCleanly() {
+  if (sessionIncidents.length) {
+    writeSessionMarker({ cleanExit: true }); // keep it, so next launch still reports what happened
+  } else {
+    try { fs.rmSync(SESSION_FILE, { force: true }); } catch { /* best effort */ }
+  }
+}
+
+writeSessionMarker();
+if (previousSession) {
+  diag(`!!! previous session (started ${previousSession.startedAt}, v${previousSession.version}) `
+    + `${previousSession.cleanExit ? 'quit after incident(s)' : 'did not shut down cleanly'}`
+    + `${previousSession.incidents?.length ? `: ${previousSession.incidents.join(' | ')}` : ''}`);
+}
+
 app.on('render-process-gone', (_event, _webContents, details) => {
   diag(`!!! RENDER-PROCESS-GONE reason=${details.reason} exitCode=${details.exitCode}`);
   diagMetrics('at-render-gone');
+  if (details.reason !== 'clean-exit') noteSessionIncident(`window renderer ${details.reason} (exit code ${details.exitCode})`);
 });
 app.on('child-process-gone', (_event, details) => {
   diag(`!!! CHILD-PROCESS-GONE type=${details.type} reason=${details.reason} exitCode=${details.exitCode} name=${details.name ?? ''}`);
   diagMetrics('at-child-gone');
+  // Logged, but not a user-facing incident: Chromium restarts its own GPU /
+  // utility processes transparently, so the user saw nothing go wrong.
 });
 process.on('uncaughtException', (err) => {
   diag(`!!! UNCAUGHT EXCEPTION ${err && err.stack ? err.stack : err}`);
+  noteSessionIncident(`uncaught exception: ${err && err.message ? err.message : err}`);
 });
 
 // Last-resort guard. Node terminates the process on an unhandled rejection,
@@ -151,13 +215,14 @@ app.setPath('sessionData', USER_DATA);
 const { JsonStore } = require('./store');
 const { LibraryDb } = require('./db');
 const library = require('./library');
-const { scanLibrary, hashId } = library;
+const { scanLibrary, ScanCancelledError, hashId } = library;
 const { registerScheme, registerMediaProtocol, mediaUrl } = require('./media-protocol');
 const { searchOpenLibrary, fetchWorkDescription, downloadCover } = require('./metadata-lookup');
 const updater = require('./updater');
 const taskbar = require('./taskbar');
 const discord = require('./discord-presence');
 const transcriber = require('./transcribe');
+const waveformGen = require('./waveform');
 const duplicates = require('./duplicates');
 const reorganizer = require('./reorganize');
 const epub = require('./epub');
@@ -193,9 +258,14 @@ const activationStore = new JsonStore(AAX_ACTIVATION_FILE, { activationBytes: nu
 const audibleStore = new JsonStore(AUDIBLE_SOURCES_FILE, {});
 // { [aaxFilePath]: true } -- see AAX_OFFERED_FILE in paths.js.
 const aaxOfferedStore = new JsonStore(AAX_OFFERED_FILE, {});
+// { lastDeepScanAt } -- see SCAN_STATE_FILE in paths.js and runScan().
+const scanStateStore = new JsonStore(SCAN_STATE_FILE, { lastDeepScanAt: null });
 
 let mainWindow = null;
 let scanning = false;
+// Replaced (not reset) per scan, same token pattern as the background fills,
+// so a cancel aimed at one scan can never leak into the next one.
+let scanCancelToken = { cancelled: false };
 
 // The plan most recently previewed via reorganize:plan, held here (not
 // trusted from the renderer) so reorganize:execute always runs exactly what
@@ -230,6 +300,7 @@ function remapIdKeyedStores(oldId, newId) {
     }
   }
   transcriber.renameTranscript(oldId, newId);
+  waveformGen.renameWaveform(oldId, newId);
 }
 
 // Set when the app is launched (or re-launched, via second-instance) from a
@@ -356,6 +427,11 @@ function toClientBook(book) {
     tracks,
     coverUrl: cover ? mediaUrl(cover) : null,
     coverThumbUrl: coverThumb ? mediaUrl(coverThumb) : null,
+    // A coarse amplitude waveform for the seek bar (see waveform.js) — null
+    // until it's been generated, which happens lazily on first open
+    // (waveform:ensure), not here. Same cache-file-existence-check shape as
+    // cover/coverThumb above.
+    waveformUrl: waveformGen.hasWaveform(book.id) ? mediaUrl(waveformGen.waveformPath(book.id)) : null,
     mtimeMs: bookMtime(book),
     fileName: path.basename(book.tracks[0]?.filePath ?? ''),
     trackCount: book.tracks.length,
@@ -366,6 +442,13 @@ function toClientBook(book) {
     // before this field existed, which is already the correct "fully
     // detailed" reading for a pre-existing library.
     detailPending: Boolean(book.detailPending),
+    // Read problems the scan recorded but never used to surface: tags it
+    // couldn't parse (the book shows as "Unknown author" with no hint why),
+    // and a cover/chapter extraction that errored -- which, by design, is
+    // never retried automatically. Powers the "Read problems" filter, the
+    // card/book-view warning, and Folders > Retry (library:retryFailed).
+    tagsFailed: Boolean(book.tagsFailed),
+    detailFailed: Boolean(book.detailFailed),
     // Powers the "Has ebook" library filter/card badge — see runPairingFill()
     // and ebook-pairing.js. Undefined (falsy) until the background pairing
     // fill or an on-demand Read Along check has actually looked.
@@ -417,6 +500,49 @@ function openExternalSafely(url) {
   if (parsed.protocol === 'https:' || parsed.protocol === 'http:') shell.openExternal(url);
 }
 
+/**
+ * If the previous session didn't end cleanly (see the session-marker notes
+ * near the top of this file), say so once and offer the diagnostic log —
+ * the difference between a bug report that says "it closed itself" and one
+ * with evidence attached. Only once per unclean session: `previousSession`
+ * is read at startup and this session's own marker has already replaced it.
+ */
+let previousSessionChecked = false;
+function checkPreviousSession() {
+  if (previousSessionChecked || !previousSession || !mainWindow) return;
+  previousSessionChecked = true;
+
+  const incidents = Array.isArray(previousSession.incidents) ? previousSession.incidents : [];
+  const started = new Date(previousSession.startedAt);
+  const when = Number.isNaN(started.getTime()) ? 'last time' : `last time (started ${started.toLocaleString()})`;
+  const what = previousSession.cleanExit
+    ? `Something went wrong ${when}, even though the app was closed normally afterward:`
+    : `Midnight Athenaeum didn't shut down normally ${when} — it may have crashed, stopped responding, or been force-closed.`;
+  const detail = [
+    what,
+    // Each incident is "<ISO timestamp> <description>"; the timestamp is for the log, not the prompt.
+    ...incidents.map((i) => `• ${i.replace(/^\S+\s/, '')}`),
+    '',
+    fs.existsSync(DIAG_FILE)
+      ? 'A diagnostic log was recorded. If this keeps happening, attaching it to a bug report makes it much easier to track down.'
+      : 'No diagnostic log was found to go with it.',
+  ].join('\n');
+
+  const buttons = fs.existsSync(DIAG_FILE) ? ['Show log file', 'Dismiss'] : ['OK'];
+  dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    title: 'Midnight Athenaeum',
+    message: previousSession.cleanExit ? 'A problem was recorded last session' : "The app didn't close normally last time",
+    detail,
+    buttons,
+    defaultId: buttons.length - 1,
+    cancelId: buttons.length - 1,
+    noLink: true,
+  }).then(({ response }) => {
+    if (buttons.length > 1 && response === 0) shell.showItemInFolder(DIAG_FILE);
+  }).catch(() => { /* a failed prompt is not worth surfacing */ });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -435,8 +561,19 @@ function createWindow() {
     },
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    checkPreviousSession();
+  });
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+
+  // Windows logging off / shutting down can end the process without the
+  // normal quit sequence ever running — that's not a crash, and must not
+  // trigger a "didn't close normally" prompt on the next launch.
+  mainWindow.on('session-end', () => {
+    appQuitting = true;
+    markSessionEndedCleanly();
+  });
 
   // Keep external links out of the app window.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -797,7 +934,7 @@ function ownDataEntries() {
   // silently stranded ebook-pairings.json at the old location.
   return [
     LIBRARY_DB_FILE, LIBRARY_FILE, PROGRESS_FILE, BOOKMARKS_FILE, NORMALIZATION_FILE,
-    METADATA_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, COVER_CACHE, ONLINE_COVER_CACHE,
+    METADATA_FILE, EBOOK_PAIRING_FILE, ACTIVITY_FILE, COVER_CACHE, ONLINE_COVER_CACHE, WAVEFORM_CACHE,
   ].filter((p) => fs.existsSync(p));
 }
 
@@ -1237,12 +1374,6 @@ function runThumbnailFill() {
   return thumbnailFillPromise;
 }
 
-/**
- * `deep` forces the full per-file check instead of the directory-mtime fast
- * path (see scanLibrary). Automatic scans -- launch, folder added -- use the
- * fast path; an explicit "Rescan library" is the escape hatch for the one
- * case the fast path can miss, a file rewritten in place under the same name.
- */
 /** True when `child` is inside `parent` (or is it). Used to tell which books belong to an unreadable folder. */
 function isInsideFolder(parent, child) {
   const rel = path.relative(parent, child);
@@ -1271,7 +1402,26 @@ async function unreadableFolders(folders) {
   return results.filter(Boolean);
 }
 
-async function runScan({ deep = false } = {}) {
+// A library edited outside the app can change a file in place without its
+// folder's mtime moving, which the fast path never notices (see
+// scanLibrary). Rather than rely on the user knowing to use Rescan, a launch
+// scan goes deep on its own once this long has passed since the last one.
+const AUTO_DEEP_SCAN_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function deepScanDue() {
+  const last = scanStateStore.get().lastDeepScanAt;
+  return typeof last !== 'number' || Date.now() - last >= AUTO_DEEP_SCAN_INTERVAL_MS;
+}
+
+/**
+ * `deep` forces the full per-file check instead of the directory-mtime fast
+ * path (see scanLibrary) -- the only way to catch a file rewritten in place
+ * under the same name. `explicit` means the user asked for this scan (File >
+ * Rescan library / the Rescan button), as opposed to launch, a folder being
+ * added, or the weekly automatic deep scan; it's what gates the Audible
+ * decrypt offer, which should only ever appear in response to the user.
+ */
+async function runScan({ deep = false, explicit = false } = {}) {
   if (scanning) return;
   await stopDetailFill(); // phase 2 must fully quiesce before we read the cache snapshot below
   await stopPairingFill();
@@ -1311,9 +1461,13 @@ async function runScan({ deep = false } = {}) {
     : [];
 
   scanning = true;
+  scanCancelToken = { cancelled: false };
+  const cancelToken = scanCancelToken;
+  let cancelled = false;
+  let completed = false;
   sendProgress('library:scan-progress', { done: 0, total: 0, scanning: true }, { force: true });
 
-  diag(`scan: starting, ${state.books.length} cached books`);
+  diag(`scan: starting${deep ? ' (deep)' : ''}${explicit ? ' (explicit)' : ''}, ${state.books.length} cached books`);
   diagMetrics('scan-start');
   let lastDiag = 0;
 
@@ -1342,7 +1496,7 @@ async function runScan({ deep = false } = {}) {
         lastDiag = done;
         diagMetrics(`scan ${done}/${total}`);
       }
-    }, { deep });
+    }, { deep, isCancelled: () => cancelToken.cancelled });
 
     // Last line of defence. Every folder read fine, yet nothing came back
     // while the library previously had books -- that is not a library
@@ -1369,14 +1523,25 @@ async function runScan({ deep = false } = {}) {
     diag(`scan: built ${books.length} books (+${preservedBooks.length} preserved), persisting`);
     libraryStore.set({ ...libraryStore.get(), books: merged });
     diag('scan: persisted');
+    completed = true;
+    // Only a deep scan that actually finished counts; one cancelled or
+    // failed part-way leaves the clock alone, so the next launch retries.
+    if (deep) scanStateStore.set({ ...scanStateStore.get(), lastDeepScanAt: Date.now() });
   } catch (err) {
-    console.error('[scan] failed:', err);
-    diag(`scan: FAILED ${err && err.stack ? err.stack : err}`);
-    dialog.showErrorBox('Scan failed', err.message);
+    if (err instanceof ScanCancelledError) {
+      // Nothing was persisted: the library is exactly as it was before the
+      // scan started (see ScanCancelledError in library.js for why).
+      cancelled = true;
+      diag('scan: cancelled by user — library left unchanged');
+    } else {
+      console.error('[scan] failed:', err);
+      diag(`scan: FAILED ${err && err.stack ? err.stack : err}`);
+      dialog.showErrorBox('Scan failed', err.message);
+    }
   } finally {
     scanning = false;
     diagMetrics('scan-end');
-    sendProgress('library:scan-progress', { done: 0, total: 0, scanning: false }, { force: true });
+    sendProgress('library:scan-progress', { done: 0, total: 0, scanning: false, cancelled }, { force: true });
     // Full library payload to the renderer -- on a large library this is the
     // single biggest IPC message the app ever sends, so it's worth knowing
     // whether the app died immediately before, during, or after it.
@@ -1390,21 +1555,24 @@ async function runScan({ deep = false } = {}) {
     // passes becomes an unhandled rejection, which terminates the main
     // process on Electron's Node. These are all best-effort background
     // passes -- a failure means some books stay unfilled until the next
-    // scan, which must never take the app down with it.
-    runDetailFill()
-      .then(() => runPairingFill())
-      .then(() => runThumbnailFill())
-      .catch((err) => console.error('[scan] background fill failed:', err));
+    // scan, which must never take the app down with it. Skipped after a
+    // cancel: that means "stop hammering the drive", so they wait for the
+    // next scan instead of immediately starting back up.
+    if (!cancelled) {
+      runDetailFill()
+        .then(() => runPairingFill())
+        .then(() => runThumbnailFill())
+        .catch((err) => console.error('[scan] background fill failed:', err));
+    }
 
-    // Undecrypted-Audible-file detection only runs on an explicit deep
-    // rescan (File > Rescan library), never a routine/automatic one — this
-    // is the one point a .aax dropped into a folder that's been part of the
-    // library for a while actually gets noticed (addFoldersToLibrary's own
-    // check only ever sees genuinely new folders). Gating it behind "deep"
-    // keeps every ordinary launch-time/background rescan exactly as fast as
-    // it already was; a deliberate manual rescan is the one place a user is
-    // already expecting extra work to happen.
-    if (deep) {
+    // Undecrypted-Audible-file detection only runs on an explicit rescan
+    // (File > Rescan library), never a routine/automatic one — this is the
+    // one point a .aax dropped into a folder that's been part of the library
+    // for a while actually gets noticed (addFoldersToLibrary's own check only
+    // ever sees genuinely new folders). Gated on `explicit`, not `deep`: the
+    // weekly automatic deep scan is also deep, but a native "decrypt these
+    // files?" dialog popping up unprompted at launch would be a nag.
+    if (explicit && completed) {
       maybeOfferAaxDecrypt(scanFolders).catch((err) => console.error('[audible] offer-decrypt check failed:', err));
     }
   }
@@ -1483,7 +1651,34 @@ function registerIpc() {
 
   // An explicit rescan is the user saying "I changed something, look properly"
   // -- so it does the full per-file check rather than the fast path.
-  ipcMain.handle('library:rescan', () => { runScan({ deep: true }); return currentState(); });
+  ipcMain.handle('library:rescan', () => { runScan({ deep: true, explicit: true }); return currentState(); });
+
+  // Phase 1 only (the background fills already stop themselves at the start
+  // of every scan). Takes effect at the next book boundary; the result is
+  // reported through the final library:scan-progress event ({ cancelled }).
+  ipcMain.handle('library:cancelScan', () => {
+    if (scanning) scanCancelToken.cancelled = true;
+    return { ok: scanning };
+  });
+
+  /**
+   * Retries every book the scan flagged as failed -- tags it couldn't read
+   * (tagsFailed) or a cover/chapter extraction that errored (detailFailed).
+   * Both are deliberately never retried automatically (a genuinely broken
+   * file would otherwise be re-parsed on every launch), so this is the
+   * user's way to ask again, e.g. after fixing a file or reconnecting a
+   * flaky drive. Clearing the cache keys makes the next scan treat each one
+   * as changed and rebuild it from scratch, which re-runs both phases.
+   */
+  ipcMain.handle('library:retryFailed', () => {
+    if (scanning) return { ok: false, error: 'A scan is already running — try again once it finishes.' };
+    const failed = libraryStore.get().books.filter((b) => b.tagsFailed || b.detailFailed);
+    if (!failed.length) return { ok: true, count: 0 };
+    for (const b of failed) libraryStore.updateBook({ ...b, signature: '', dirSig: null });
+    diag(`scan: retrying ${failed.length} failed book(s)`);
+    runScan();
+    return { ok: true, count: failed.length };
+  });
 
   /**
    * Fast-tracks one book's phase-2 detail fill (cover/chapters) for when the
@@ -1939,6 +2134,31 @@ function registerIpc() {
   });
 
   /**
+   * A coarse per-book waveform for the seek bar (see waveform.js) — silent
+   * and automatic, not opt-in like transcription: openBook() calls this for
+   * every book it opens. Returns immediately either way; { ready: true }
+   * means the cache already had it (toClientBook's waveformUrl is already
+   * current), { ready: false } means generation was queued (or is already
+   * running/queued from an earlier open) and the result reaches the
+   * renderer as a normal library:booksUpdated push once it's ready, the
+   * same channel background detail-fill already uses.
+   */
+  ipcMain.handle('waveform:ensure', (_event, bookId) => {
+    if (typeof bookId !== 'string') return { ok: false, ready: false };
+    if (waveformGen.hasWaveform(bookId)) return { ok: true, ready: true };
+
+    const raw = libraryStore.get().books.find((b) => b.id === bookId);
+    if (!raw) return { ok: false, ready: false };
+
+    waveformGen.requestWaveform(raw, (id, ok) => {
+      if (!ok) return;
+      const book = libraryStore.get().books.find((b) => b.id === id);
+      if (book) mainWindow?.webContents.send('library:booksUpdated', [toClientBook(book)]);
+    });
+    return { ok: true, ready: false };
+  });
+
+  /**
    * Returns the book's current ebook-pairing check if one exists (whether
    * matched, ambiguous, or none — any of those means it's already been
    * checked); otherwise computes and persists a fresh one. Unlike
@@ -2137,6 +2357,7 @@ function registerIpc() {
       // Best effort — a leftover cached cover file isn't worth surfacing an error for.
     }
     transcriber.deleteTranscript(bookId);
+    waveformGen.deleteWaveform(bookId);
 
     const next = currentState();
     mainWindow?.webContents.send('library:changed', next);
@@ -2365,6 +2586,7 @@ app.whenReady().then(async () => {
     // including any manual picks, with data computed from that empty view.
     pairingStore.load(), activityStore.load(),
     activationStore.load(), audibleStore.load(), aaxOfferedStore.load(),
+    scanStateStore.load(),
   ]);
   {
     const state = libraryStore.get();
@@ -2408,8 +2630,11 @@ app.whenReady().then(async () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 
-  // Pick up files added outside the app since last launch.
-  if (libraryStore.get().folders.length) runScan();
+  // Pick up files added outside the app since last launch. Normally the fast
+  // path; once a week (see deepScanDue) the full per-file check, so a file
+  // re-tagged in place outside the app still converges without the user
+  // needing to know that only File > Rescan library would catch it.
+  if (libraryStore.get().folders.length) runScan({ deep: deepScanDue() });
 });
 
 // A jump-list click while the app is already running lands here instead of
@@ -2434,6 +2659,7 @@ app.on('window-all-closed', () => {
 // process down while a write could still be in flight.
 let readyToQuit = false;
 app.on('before-quit', (event) => {
+  appQuitting = true;
   if (readyToQuit) return;
   event.preventDefault();
   libraryStore.close().catch((err) => {
@@ -2451,7 +2677,13 @@ app.on('before-quit', (event) => {
   activationStore.flushSync();
   audibleStore.flushSync();
   aaxOfferedStore.flushSync();
+  scanStateStore.flushSync();
   // Best-effort, not awaited — the RPC pipe closing when this process exits
   // cleans up on Discord's side regardless, so this isn't worth delaying quit for.
   discord.shutdown();
 });
+
+// Last event of a deliberate quit (after before-quit's deferred DB close has
+// finished and re-issued app.quit()), so reaching it means the session really
+// did end on purpose. See the session-marker notes near the top of this file.
+app.on('will-quit', () => markSessionEndedCleanly());

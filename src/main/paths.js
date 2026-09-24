@@ -56,6 +56,12 @@ module.exports = {
   // Covers fetched from the online metadata lookup, kept separate from
   // extracted-from-file covers so the two provenances aren't muddled on disk.
   ONLINE_COVER_CACHE: path.join(DATA_ROOT, 'covers-online'),
+  // A coarse per-book amplitude waveform for the seek bar (see waveform.js) —
+  // generated lazily the first time a book is opened, not during a scan.
+  // Cached next to the cover, in its own directory, since -- like covers --
+  // it's small and fully regenerable from the audio file, so it's excluded
+  // from backups the same way.
+  WAVEFORM_CACHE: path.join(DATA_ROOT, 'waveforms'),
   // Legacy monolithic store, kept only so startup can detect and migrate a
   // pre-SQLite install; the app no longer writes here once library.db exists.
   LIBRARY_FILE: path.join(DATA_ROOT, 'library.json'),
@@ -91,6 +97,13 @@ module.exports = {
   // explicit-rescan form) is never offered again, even for a folder that's
   // been part of the library for a while.
   AAX_OFFERED_FILE: path.join(DATA_ROOT, 'audible-offered.json'),
+  // { lastDeepScanAt: number|null } -- when a full per-file scan last
+  // completed (see runScan's weekly automatic deep scan in main.js).
+  SCAN_STATE_FILE: path.join(DATA_ROOT, 'scan-state.json'),
+  // { startedAt, version, pid, cleanExit, incidents: string[] } -- written at
+  // launch and removed on a clean quit, so the next launch can tell whether
+  // this session ended unexpectedly (see checkPreviousSession in main.js).
+  SESSION_FILE: path.join(DATA_ROOT, 'session.json'),
   // Per-book timestamped transcripts (opt-in, local Whisper transcription).
   TRANSCRIPTS_DIR: path.join(DATA_ROOT, 'transcripts'),
   // The downloaded ggml model file(s) — large (100MB+), kept out of backups

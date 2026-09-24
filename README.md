@@ -96,10 +96,13 @@ a signal that anything was found wrong with the installer, and there's no
 Microsoft/AV review behind it either way. Judge it on what you can actually
 check instead:
 
-- **The source is all here.** Every line that ends up in the installer is in
-  this repo — nothing closed-source, no separate "pro" build. `src/main/`
-  is the entire main-process/IPC surface; there's no code path that isn't in
-  this tree.
+- **The source is all here.** All of the app's own code is in this repo —
+  nothing closed-source, no separate "pro" build. `src/main/` is the entire
+  main-process/IPC surface; there's no app code path that isn't in this tree.
+  The installer also carries prebuilt open-source components (Electron,
+  FFmpeg, whisper.cpp, SQLite) pulled in from their own projects by the
+  public build below — see
+  [Third-party software and licenses](#third-party-software-and-licenses).
 - **The installer is built in public, not on anyone's laptop.** Every release
   is produced by [`.github/workflows/release.yml`](.github/workflows/release.yml),
   a GitHub Actions job that checks out this exact tagged commit on a clean
@@ -259,6 +262,7 @@ installer assumes for anyone else).
   userData\               Electron/Chromium profile and caches
   covers\                 extracted cover art
   covers-online\          covers fetched via the online metadata lookup
+  waveforms\              per-book seek-bar waveforms (tiny, regenerated if deleted)
   library.db              scanned library (SQLite; library.json, if present, is a legacy leftover)
   progress.json           per-book listening position, speed
   bookmarks.json          per-book bookmarks
@@ -267,6 +271,8 @@ installer assumes for anyone else).
   ebook-pairings.json     book <-> EPUB pairings for Read along
   transcripts\            per-book Whisper transcripts
   diagnostic.log          scan progress and unexpected-shutdown diagnostics
+  scan-state.json         when the last full (deep) scan completed
+  session.json            present only while the app runs (see below)
 ```
 
 Scanning happens in two phases. The first pass reads just tags and duration —
@@ -275,6 +281,24 @@ single-file `.m4b`/`.m4a` books) chapter extraction to a low-priority
 background pass afterward, which resumes automatically if interrupted and
 jumps the queue for whatever book you open first. Results are cached against
 each file's size and mtime, so rescans only reparse what changed.
+
+Routine launch scans take a fast path that only checks each book's folder,
+which can miss a file re-tagged in place under the same name. **Rescan**
+always does the full per-file check, and a launch scan does it on its own
+once a week, so a library edited outside the app catches up either way.
+While any scan is running, the Rescan button becomes **Cancel scan** —
+cancelling leaves your library exactly as it was before the scan started.
+
+Books whose files couldn't be read (a permission problem, a file locked by
+another program, a flaky drive) are flagged rather than silently showing up
+as "Unknown author": a warning icon on the card, an explanation in the book
+view, and a **Read problems** filter tab that appears only while there are
+any. **Folders → Retry books with read problems** tries them again.
+
+If the app ever crashes or is closed some other way than quitting normally,
+the next launch says so and offers to show `diagnostic.log` — attaching it
+to a bug report makes the problem much easier to track down. (`session.json`
+is how it knows: it's removed on every normal quit.)
 
 ### Backup and restore
 
@@ -325,6 +349,7 @@ src/main/
   ebook-pairing.js   audiobook <-> EPUB matching
   transcribe.js      whisper.cpp transcription + transcript search
   clip.js            bookmark clip (audio/image) export
+  waveform.js        per-book seek-bar loudness waveform
   duplicates.js      duplicate-book detection
   reorganize.js      reorganize-by-author moves + undo journal
   finished.js        finished-status tracking
@@ -539,13 +564,20 @@ Midnight Athenaeum's side.
 
 The library opens with a **Continue listening** shelf — the books you're partway
 through, most-recently-played first, one click from resuming. Filter tabs (All /
-In progress / Finished / Not started / Has ebook / Full cast) narrow the grid
-below, and a **Genre** dropdown next to Sort — populated from whatever genre
+In progress / Finished / Not started / Has ebook / Full cast, plus Read problems
+when any book has one) narrow the grid below, and a **Genre** dropdown next to Sort — populated from whatever genre
 tags are actually in your library, hidden entirely if none are — narrows it
 further on top of whichever tab is active; the search box also matches genre
 text. Each book remembers its own **playback speed**, and resuming after a
 pause **rewinds a few seconds** (more the longer you were away) so you don't
 lose the thread.
+
+The seek bar shows the book's **loudness waveform** — quiet passages, pauses
+and loud scenes are visible at a glance — with small ticks marking each
+chapter boundary. Hover or drag anywhere on it to see the exact time you'd
+land on before letting go. The waveform is worked out once, in the
+background, the first time you open a book (a few seconds per hour of
+audio); until then the bar is a plain line and everything works as usual.
 
 The **Skip** dropdown in the player sets how far the ↺/↻ buttons and the plain
 `←`/`→` keys jump — 10/15/30/45/60s, 30 by default. The buttons' labels update to
@@ -664,3 +696,32 @@ the book**. The volume fades gently over the last 20 seconds rather than cutting
 out. If you fall asleep, resuming rewinds 30 seconds so you don't lose your place,
 and **+5 minutes** extends (or restarts) the timer and picks playback back up.
 The duration countdown only runs while audio is playing, so pausing pauses it too.
+
+## Third-party software and licenses
+
+The MIT license in [LICENSE](LICENSE) covers Midnight Athenaeum's own code.
+The installer also includes other people's software, each under its own
+license:
+
+| Component | Used for | License |
+| --- | --- | --- |
+| [Electron](https://www.electronjs.org/) / Chromium | the app runtime | MIT; Chromium's component licenses |
+| [FFmpeg](https://ffmpeg.org/) (via [ffmpeg-static](https://github.com/eugeneware/ffmpeg-static)) | audio conversion for transcription, waveforms, clips, and `.aax` decryption | **GPL v3** (see below) |
+| [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (via [@kutalia/whisper-node-addon](https://www.npmjs.com/package/@kutalia/whisper-node-addon)) | offline transcription | MIT |
+| [SQLite](https://sqlite.org/) (via [@vscode/sqlite3](https://github.com/microsoft/vscode-node-sqlite3)) | the library database | public domain; binding BSD-3-Clause |
+| [music-metadata](https://github.com/Borewit/music-metadata) | reading audio tags | MIT |
+| [electron-updater](https://www.electron.build/auto-update), [@xhayper/discord-rpc](https://github.com/xhayper/discord-rpc) and their dependencies | updates, Discord presence | MIT / ISC / Apache-2.0 / BSD and similar permissive licenses |
+
+**About FFmpeg:** the bundled `ffmpeg.exe` is a GPL v3 build (gyan.dev's
+"essentials" build of FFmpeg 6.1.1). Midnight Athenaeum runs it as a separate
+program rather than linking it into its own code, which is why the app itself
+can stay MIT-licensed. The GPL v3 text and a pointer to the exact source
+(<https://github.com/FFmpeg/FFmpeg/commit/e38092ef93>, built as described at
+<https://www.gyan.dev/ffmpeg/builds/>) are installed right next to it, in
+`resources\app.asar.unpacked\node_modules\ffmpeg-static\`
+(`ffmpeg.exe.LICENSE`, `ffmpeg.exe.README`). Electron's and Chromium's
+license files (`LICENSE.electron.txt`, `LICENSES.chromium.html`) are in the
+install folder itself.
+
+The speech model transcription downloads on first use (`ggml-base.en`) comes
+from the whisper.cpp project and is MIT-licensed.

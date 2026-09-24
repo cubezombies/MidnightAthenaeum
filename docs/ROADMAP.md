@@ -1049,10 +1049,51 @@ longer terminate the app.
 process-level isolation (`utilityProcess`) rather than a thread sharing the
 main process.
 
-### 7. Waveform / seek preview — **M**
+### 7. Waveform / seek preview — **shipped** ✅
 Precompute a coarse waveform per book for a richer seek bar and instant scrub
 previews. Cache next to the cover. Nice-to-have that also visualizes chapter
 boundaries.
+
+**Shipped** (`src/main/waveform.js`): 1000 loudness points per book, cached
+as `waveforms/<bookId>.v1.levels` (1KB each). Design decisions, most of them
+forced by measurement:
+
+- **Lazy, not on scan.** Generated the first time a book is opened
+  (`waveform:ensure` from `openBook`), one book at a time via a deduped queue,
+  and delivered through the existing `library:booksUpdated` push. Doing it
+  during the scan would mean fully decoding every book up front — the
+  CPU-bound class of work #6 above says to keep off the scan path. Measured
+  ~6s per hour of audio (11s for a real 2.5h book).
+- **8kHz decode, not "coarse" 100Hz.** The first cut decoded straight to
+  100Hz to keep the data tiny, and every waveform came back near-silent:
+  resampling low-pass filters at the target Nyquist (50Hz), which removes
+  almost all speech energy before it can be measured (a 440Hz test tone came
+  back ~14x quieter than at its native rate). 8kHz keeps the speech band;
+  the reduction to 1000 points happens afterward, streamed per chunk so a
+  long book never sits in memory as PCM.
+- **Loudness (RMS in dB), not peak.** A peak waveform of a real mastered
+  audiobook was a flat band — every multi-second window contains at least
+  one near-full-scale syllable. RMS dips for pauses and chapter-break
+  silences (which visibly line up under the chapter ticks on a real book)
+  and rises for music and loud scenes. The renderer then stretches each
+  book between its own 2nd/98th percentile, since a mastered book spans only
+  a few dB. The version number in the cache filename exists so a future
+  change to what the bytes mean just misses and regenerates.
+- **Canvas behind the real `<input type="range">`**, whose track paint is
+  made transparent: keyboard/drag/accessibility behaviour is untouched. The
+  input is 32px tall so the whole waveform is the click/drag target, not
+  just a thin line. While dragging, the played/unplayed split follows the
+  drag target and a tooltip shows the time — the "instant scrub preview",
+  local and instant because the whole waveform is already in memory. Hover
+  shows the same tooltip without dragging. Chapter boundaries are thin ticks
+  drawn from the book's existing chapter list, not stored in the file.
+- **CSP:** this is the renderer's first `fetch()` (everything else goes
+  through IPC), so `connect-src 'self' ab-media:` was added — without it
+  the fetch was silently blocked by `default-src 'self'`.
+
+Verified in the real app on a real 2.5-hour, 16-chapter m4b (ticks aligned,
+hover time correct, both themes) and on a two-track fixture whose stored
+levels match each track's measured loudness in its proportional slice.
 
 ---
 
@@ -1089,40 +1130,88 @@ mount that answers with an empty listing). Verified against the real
 distinguished from an unreadable one — the former is a genuine "you deleted
 everything", the latter never is.
 
-### 2. Books that fail to parse are invisible — **S**
+### 2. Books that fail to parse are invisible — **fixed** ✅
 `library.js` already records `tagsFailed` and `detailFailed` per book, and
 logs a count to the console (`N book(s) had tag-parse failures`). Nothing
-surfaces either flag: `toClientBook` doesn't send them and the renderer
-never references them (verified — zero occurrences in `app.js`). So a book
-that scanned with unreadable tags shows up as "Unknown author" with no
-indication *why*, and a failed detail-fill is silently permanent until the
-book's signature changes. Surface it: a filter, a card badge, or a line in
-the Folders panel — plus a "retry failed books" action, since the current
-best-effort design deliberately never retries on its own.
+surfaced either flag: `toClientBook` didn't send them and the renderer never
+referenced them. So a book that scanned with unreadable tags showed up as
+"Unknown author" with no indication *why*, and a failed detail-fill was
+silently permanent until the book's signature changed.
 
-### 3. No way to cancel a running scan — **S**
-There is cancellation *machinery* (`isCancelled` tokens for the detail,
+**Fixed:** both flags now reach the renderer. A **Read problems (N)** filter
+tab appears only while at least one book has one (and falls back to All if a
+retry clears the last one while it's selected); affected cards get a small
+warning icon inline in the author line — not a corner badge, since all four
+corners are taken and the author line is fixed-height, which the virtualized
+grid depends on — with the explanation in the tooltip; the book view shows a
+plain-language line saying what couldn't be read. **Folders → Retry books
+with read problems** (`library:retryFailed`) clears those books' cache keys
+so the next scan rebuilds them from scratch through both phases — the
+explicit "ask again" the best-effort design deliberately never does on its
+own. Worth knowing when testing: `music-metadata` is very tolerant of
+malformed *content* (random bytes as `.mp3`/`.m4b` parse without throwing,
+yielding "Unknown author" but not `tagsFailed`), so in practice `tagsFailed`
+means the file couldn't be *read* — permission denied, locked by another
+program, a flaky drive — which is also exactly the transient case Retry
+exists for. Verified end-to-end with a read-denied (ACL) file: flagged
+everywhere above, then fixed on disk and cleared by Retry.
+
+### 3. No way to cancel a running scan — **fixed** ✅
+There was cancellation *machinery* (`isCancelled` tokens for the detail,
 pairing and thumbnail fills) but nothing for phase 1, and no UI for any of
-it. A scan started by accident on a large library holds the Rescan button
-disabled until it finishes. Wire a cancel affordance to the existing token
-pattern.
+it. A scan started by accident on a large library held the Rescan button
+disabled until it finished.
 
-### 4. The fast path can miss in-place edits — **S**
+**Fixed:** while a scan runs, the Rescan button becomes an enabled **Cancel
+scan** (`library:cancelScan`, same replace-per-run token pattern as the
+fills). `scanLibrary` polls the token between directory entries and between
+books and throws `ScanCancelledError` rather than returning what it has — a
+partial result can never be persisted, because every book it hadn't reached
+yet would look deleted. So a cancel leaves the library exactly as it was, and
+the background fills aren't restarted afterward (the point of cancelling is to
+stop the disk work). Verified against the real ~5,900-book library from a
+cold start: stopped ~1s after the click, nothing persisted, no fill started,
+and a cancelled deep scan doesn't count toward #4's weekly clock.
+
+### 4. The fast path can miss in-place edits — **fixed** ✅
 The directory-mtime fast path skips per-file checks for unchanged folders,
 which is what made rescans cheap — but a file rewritten in place under the
 same name (a re-tag) leaves the folder mtime untouched and goes unnoticed.
-File > Rescan library forces the full per-file check, so the escape hatch
-exists; it just requires knowing to use it. Consider an occasional automatic
-deep scan (first launch of the week, say) so a library edited outside the app
-converges without the user having to know the distinction.
+File > Rescan library forces the full per-file check, but that required
+knowing to use it.
 
-### 5. Nothing surfaces an unexpected exit — **S**
-`diagnostic.log` now records process-gone reasons, uncaught exceptions and
-scan milestones, which is how the v0.14.0 scan hang was diagnosed. But it is
-only useful to someone who knows to look for the file. On launch, notice that
-the previous session ended without a clean shutdown and offer the log — the
-difference between a bug report saying "it closed itself" and one with
-evidence attached.
+**Fixed:** the launch scan goes deep on its own once 7 days have passed since
+the last *completed* deep scan (recorded in `scan-state.json`; a manual
+Rescan counts, a cancelled or failed one doesn't). `runScan` now separates
+`deep` (full per-file check) from `explicit` (user-initiated): the Audible
+"decrypt these files?" offer, which used to key off `deep`, keys off
+`explicit`, so the automatic weekly deep scan never pops a native dialog
+unprompted. The trade-off is deliberate: a deep scan of a large library on a
+spinning drive is noticeably heavier than the fast path (~7.6s vs ~2.9s warm
+on the dev library, more cold), paid once a week at launch in exchange for
+convergence. Verified end-to-end: a file re-tagged in place (folder mtime
+confirmed unchanged) was missed by an in-week launch and picked up by the
+next launch once the last deep scan was backdated past a week.
+
+### 5. Nothing surfaces an unexpected exit — **fixed** ✅
+`diagnostic.log` records process-gone reasons, uncaught exceptions and scan
+milestones, which is how the v0.14.0 scan hang was diagnosed — but it was
+only useful to someone who knew to look for the file.
+
+**Fixed:** each launch writes a session marker (`session.json`) that only a
+clean quit (`will-quit`) removes; Windows ending the session (`session-end`,
+logoff/shutdown) also counts as clean. If the next launch finds it, the
+previous session crashed, hung until killed, or was force-closed, and a
+prompt says so with a **Show log file** button (selects `diagnostic.log` in
+Explorer, ready to attach to a bug report). Incidents the app *survives* are
+recorded into the marker too — chiefly the renderer dying while the main
+process lives on, which leaves a blank window the user then closes normally —
+so a "clean" quit after one still gets reported, worded as "a problem was
+recorded last session". Chromium's own GPU/utility process restarts are
+logged but deliberately not surfaced (the user saw nothing go wrong).
+Verified all three paths in the real app: force-kill → prompt; graceful quit →
+marker removed, no prompt; renderer crash (CDP `Page.crash`) then graceful quit
+→ marker kept with the incident, prompt on next launch.
 
 ---
 

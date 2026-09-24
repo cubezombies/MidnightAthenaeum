@@ -8,6 +8,41 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-09-24
+### Added
+- **Waveform seek bar** — the seek bar now shows the book's loudness
+  waveform, so quiet passages, pauses and loud scenes are visible at a
+  glance, with small ticks marking each chapter boundary. Hover or drag
+  anywhere on it to see exactly what time you'd land on before letting go,
+  and the "played" colour follows your drag. The waveform is worked out once
+  in the background the first time you open a book (a few seconds per hour
+  of audio) and remembered after that; until it's ready the bar works
+  exactly as before. The seek bar is also taller now, so it's easier to hit.
+
+## [0.22.0] - 2026-09-24
+### Added
+- **Cancel a running scan** — while a scan is running, the Rescan button
+  becomes **Cancel scan**. Cancelling stops within about a second and leaves
+  your library exactly as it was before the scan started; nothing half-scanned
+  is ever saved.
+- **Books that couldn't be read are now flagged** — a book whose file
+  couldn't be read (permission problem, locked by another program, a flaky
+  drive) used to just show up as "Unknown author" with no explanation. It now
+  gets a warning icon on its card, a line in the book view saying what went
+  wrong, and a **Read problems** filter tab (shown only while there are
+  any). **Folders → Retry books with read problems** tries them again.
+- **Notice when the app didn't close normally** — if Midnight Athenaeum
+  crashed, stopped responding, or was force-closed, the next launch says so
+  and offers to show the diagnostic log, ready to attach to a bug report.
+  A window crash the app recovered from is reported too.
+
+### Changed
+- Once a week, the launch-time scan does the same thorough per-file check as
+  **Rescan**, so a file re-tagged outside the app (which the quick everyday
+  scan can miss) shows up correctly without you having to know to rescan.
+  The "found Audible files, decrypt them?" offer still only ever appears
+  after a Rescan you started yourself.
+
 ## [0.21.1] - 2026-09-15
 ### Fixed
 - **The genre filter was mostly just showing "Audiobook."** Genre tags

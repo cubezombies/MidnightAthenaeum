@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; img-src 'self' ab-media: https://covers.openlibrary.org; media-src 'self' ab-media:; style-src 'self'; script-src 'self';" />
+        content="default-src 'self'; img-src 'self' ab-media: https://covers.openlibrary.org; media-src 'self' ab-media:; connect-src 'self' ab-media:; style-src 'self'; script-src 'self';" />
   <title>Midnight Athenaeum</title>
   <script src="theme-init.js"></script>
   <link rel="stylesheet" href="styles.css" />
@@ -33,6 +33,9 @@
     </symbol>
     <symbol id="icon-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 3v12"/><polyline points="7 11 12 16 17 11"/><path d="M5 19h14"/>
+    </symbol>
+    <symbol id="icon-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
     </symbol>
     <symbol id="icon-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>
@@ -169,6 +172,7 @@
           <button class="filter-tab" data-filter="new" role="tab">Not started</button>
           <button class="filter-tab" data-filter="ebook" role="tab">Has ebook</button>
           <button class="filter-tab" data-filter="fullcast" role="tab">Full cast</button>
+          <button id="problemsFilterTab" class="filter-tab hidden" data-filter="problems" role="tab" title="Books whose tags, cover or chapters couldn't be read">Read problems</button>
         </div>
         <div class="toolbar-right">
           <span id="filterCount" class="filter-count muted small"></span>
@@ -205,6 +209,7 @@
           <p id="bookAuthor" class="muted"></p>
           <p id="bookSub" class="muted small"></p>
           <p id="fullCastBadge" class="full-cast-tag hidden">Full cast production</p>
+          <p id="bookProblem" class="book-problem hidden" role="note"></p>
           <p id="metadataBadge" class="muted small metadata-badge hidden">via Open Library</p>
           <p id="bookDesc" class="desc"></p>
           <div class="book-actions">
@@ -296,7 +301,11 @@
   <footer id="player" class="player hidden">
     <div class="player-seek">
       <span id="timeCurrent" class="time">0:00</span>
-      <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" />
+      <div id="seekWrap" class="seek-wrap">
+        <canvas id="seekWaveform" class="seek-waveform"></canvas>
+        <input id="seek" class="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" />
+        <div id="seekPreview" class="seek-preview hidden"></div>
+      </div>
       <span id="timeTotal" class="time">0:00</span>
     </div>
     <div class="player-row">

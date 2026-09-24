@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('api', {
   // replacement, needed to resolve a drag-and-dropped folder's real path.
   getPathForFile: (file) => webUtils.getPathForFile(file),
   rescan: () => ipcRenderer.invoke('library:rescan'),
+  cancelScan: () => ipcRenderer.invoke('library:cancelScan'),
+  retryFailedBooks: () => ipcRenderer.invoke('library:retryFailed'),
   ensureBookDetail: (bookId) => ipcRenderer.invoke('library:ensureBookDetail', bookId),
   saveProgress: (payload) => ipcRenderer.invoke('progress:save', payload),
   clearProgress: (bookId) => ipcRenderer.invoke('progress:clear', bookId),
@@ -55,6 +57,7 @@ contextBridge.exposeInMainWorld('api', {
   getTranscribeStatus: (bookId) => ipcRenderer.invoke('transcribe:getStatus', bookId),
   getTranscript: (bookId) => ipcRenderer.invoke('transcript:get', bookId),
   deleteTranscript: (bookId) => ipcRenderer.invoke('transcript:delete', bookId),
+  ensureWaveform: (bookId) => ipcRenderer.invoke('waveform:ensure', bookId),
   findDuplicates: () => ipcRenderer.invoke('duplicates:find'),
   removeDuplicateBook: (bookId) => ipcRenderer.invoke('duplicates:remove', bookId),
   planReorganize: () => ipcRenderer.invoke('reorganize:plan'),

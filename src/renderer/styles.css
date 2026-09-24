@@ -176,6 +176,12 @@ body {
 .folder-remove:hover { background: var(--danger-bg); color: var(--danger-text); }
 
 .folders-add { align-self: stretch; text-align: center; }
+.folders-problems {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 6px; padding: 8px 6px 2px; border-top: 1px solid var(--line);
+}
+.folders-problems-text { color: var(--danger-text); font-size: 12px; }
+.folders-retry { align-self: flex-start; font-size: 12px; }
 
 input[type="search"] {
   background: var(--bg-elev-2);
@@ -371,6 +377,16 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
   box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
 }
 .full-cast-badge ~ .audible-badge { bottom: 30px; }
+
+/* Scan read failure (tagsFailed/detailFailed) — inline in the card's author
+   line, see buildCard in app.js for why it isn't a corner badge. */
+.card-problem { color: var(--danger-text); margin-right: 4px; }
+.card-problem .icon { width: 12px; height: 12px; vertical-align: -1px; }
+
+.book-problem {
+  margin: 6px 0 0; padding: 6px 10px; border-radius: 7px;
+  background: var(--danger-bg); color: var(--danger-text); font-size: 12px;
+}
 
 /* Book view — an inline tag rather than an overlay badge, since the book
    cover there is large and not corner-badge territory the way a grid card is. */
@@ -569,6 +585,33 @@ input[type="range"]::-webkit-slider-thumb {
   background: var(--accent); margin-top: -4.5px;
 }
 .seek { flex: 1; }
+
+/*
+ * The waveform lives on a canvas *behind* the real range input, which stays
+ * fully in place for its native keyboard/drag/accessibility behavior — only
+ * its own track paint is emptied out (below) so the canvas shows through.
+ * See renderSeekWaveform() in app.js.
+ *
+ * Both the wrap and the input itself get an explicit height, taller than the
+ * 4px visual track: appearance:none replaces the track/thumb's own painting,
+ * but not the input element's own box, and Chromium still centers the track
+ * pseudo-element within that box — so this grows the click/drag hit area to
+ * match the taller waveform, not just its picture.
+ */
+.seek-wrap { position: relative; flex: 1; display: flex; align-items: center; height: 32px; }
+.seek-wrap .seek { position: relative; z-index: 1; height: 32px; }
+.seek-waveform {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; /* clicks/drags still go to the real <input> above */
+}
+.seek::-webkit-slider-runnable-track { background: transparent; }
+
+.seek-preview {
+  position: absolute; bottom: calc(100% + 6px); transform: translateX(-50%);
+  background: var(--bg-elev-2); border: 1px solid var(--line); border-radius: 5px;
+  padding: 2px 6px; font-size: 11px; font-variant-numeric: tabular-nums;
+  color: var(--text); pointer-events: none; white-space: nowrap; z-index: 2;
+}
 
 .player-row {
   display: grid;
