@@ -130,15 +130,33 @@ async function consolidateSelfContainedParts(units) {
 }
 
 /**
+ * Thrown when a scan is cancelled part-way. A partial scan result can never
+ * be persisted -- every book it hadn't reached yet would look deleted -- so
+ * cancellation aborts the whole scan rather than returning what it has.
+ */
+class ScanCancelledError extends Error {
+  constructor() {
+    super('Scan cancelled');
+    this.name = 'ScanCancelledError';
+  }
+}
+
+/**
  * Scan folders and return one entry per book.
  *
  * Books whose file set is byte-for-byte unchanged are reused from `cachedBooks`,
  * so rescanning a large library costs a directory walk rather than a full reparse.
+ *
+ * `isCancelled` is polled between directory entries and between books; once
+ * it returns true the scan throws ScanCancelledError.
  */
-async function scanLibrary(folders, cachedBooks = [], onProgress, { deep = false } = {}) {
+async function scanLibrary(folders, cachedBooks = [], onProgress, { deep = false, isCancelled = () => false } = {}) {
   const files = [];
   for (const folder of folders) {
-    for await (const file of walk(folder)) files.push(file);
+    for await (const file of walk(folder)) {
+      if (isCancelled()) throw new ScanCancelledError();
+      files.push(file);
+    }
   }
 
   const units = await consolidateSelfContainedParts(consolidatePartedFolders(groupIntoBooks(files)));
@@ -146,6 +164,9 @@ async function scanLibrary(folders, cachedBooks = [], onProgress, { deep = false
   let done = 0;
 
   const built = await mapLimit(units, BOOK_CONCURRENCY, async (unit) => {
+    // Skip the remaining books cheaply rather than throwing from inside a
+    // mapLimit worker; the check after mapLimit turns this into the abort.
+    if (isCancelled()) return null;
     const startedAt = Date.now();
     const id = hashId(unit.kind === 'single' ? unit.files[0] : `${unit.dir}::${unit.files.length}`);
     const cached = cacheById.get(id);
@@ -241,6 +262,8 @@ async function scanLibrary(folders, cachedBooks = [], onProgress, { deep = false
     return book;
   });
 
+  if (isCancelled()) throw new ScanCancelledError();
+
   const books = built.filter(Boolean);
   books.sort((a, b) => a.author.localeCompare(b.author) || a.title.localeCompare(b.title));
 
@@ -310,5 +333,5 @@ function generateCoverThumb(id, sourcePath) {
 }
 
 module.exports = {
-  scanLibrary, fillBookDetails, ensureDetail, AUDIO_EXTENSIONS, hashId, generateCoverThumb,
+  scanLibrary, ScanCancelledError, fillBookDetails, ensureDetail, AUDIO_EXTENSIONS, hashId, generateCoverThumb,
 };

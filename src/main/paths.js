@@ -91,6 +91,13 @@ module.exports = {
   // explicit-rescan form) is never offered again, even for a folder that's
   // been part of the library for a while.
   AAX_OFFERED_FILE: path.join(DATA_ROOT, 'audible-offered.json'),
+  // { lastDeepScanAt: number|null } -- when a full per-file scan last
+  // completed (see runScan's weekly automatic deep scan in main.js).
+  SCAN_STATE_FILE: path.join(DATA_ROOT, 'scan-state.json'),
+  // { startedAt, version, pid, cleanExit, incidents: string[] } -- written at
+  // launch and removed on a clean quit, so the next launch can tell whether
+  // this session ended unexpectedly (see checkPreviousSession in main.js).
+  SESSION_FILE: path.join(DATA_ROOT, 'session.json'),
   // Per-book timestamped transcripts (opt-in, local Whisper transcription).
   TRANSCRIPTS_DIR: path.join(DATA_ROOT, 'transcripts'),
   // The downloaded ggml model file(s) — large (100MB+), kept out of backups

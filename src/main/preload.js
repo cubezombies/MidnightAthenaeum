@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('api', {
   // replacement, needed to resolve a drag-and-dropped folder's real path.
   getPathForFile: (file) => webUtils.getPathForFile(file),
   rescan: () => ipcRenderer.invoke('library:rescan'),
+  cancelScan: () => ipcRenderer.invoke('library:cancelScan'),
+  retryFailedBooks: () => ipcRenderer.invoke('library:retryFailed'),
   ensureBookDetail: (bookId) => ipcRenderer.invoke('library:ensureBookDetail', bookId),
   saveProgress: (payload) => ipcRenderer.invoke('progress:save', payload),
   clearProgress: (bookId) => ipcRenderer.invoke('progress:clear', bookId),

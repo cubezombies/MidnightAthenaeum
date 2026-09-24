@@ -21,7 +21,9 @@ const el = {
   folders: document.querySelector('.folders'), foldersBtn: $('foldersBtn'), foldersMenu: $('foldersMenu'),
   foldersList: $('foldersList'),
   bookCover: $('bookCover'), bookTitle: $('bookTitle'), bookAuthor: $('bookAuthor'),
-  bookSub: $('bookSub'), fullCastBadge: $('fullCastBadge'), bookDesc: $('bookDesc'), chapterList: $('chapterList'),
+  bookSub: $('bookSub'), fullCastBadge: $('fullCastBadge'), bookProblem: $('bookProblem'),
+  problemsFilterTab: $('problemsFilterTab'),
+  bookDesc: $('bookDesc'), chapterList: $('chapterList'),
   chapterCount: $('chapterCount'), chapterSearch: $('chapterSearch'),
   resetProgressBtn: $('resetProgressBtn'),
   finishedToggleBtn: $('finishedToggleBtn'),
@@ -607,12 +609,23 @@ function buildCard(book, { badge, delegate } = {}) {
   const author = document.createElement('div');
   author.className = 'card-author';
   author.textContent = book.author;
+  // Inline in the author line rather than a cover badge: all four cover
+  // corners are already spoken for, and the author line is fixed-height
+  // (min-height + 2-line clamp), so this can't change card height — which
+  // the virtualized grid measures once and assumes is uniform.
+  const problem = readProblemText(book);
+  if (problem) {
+    const warn = document.createElement('span');
+    warn.className = 'card-problem';
+    warn.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-alert"></use></svg>';
+    author.prepend(warn);
+  }
 
   card.append(art, title, author);
   // Titles/authors are clamped to 2 lines and often longer than that in a
   // real library (box sets, subtitles) — a native tooltip is the only way to
   // read the rest without opening the book.
-  card.title = `${book.title} — ${book.author}`;
+  card.title = `${book.title} — ${book.author}${problem ? `\n⚠ ${problem}` : ''}`;
   card.dataset.bookId = book.id;
   // The main grid can hold thousands of these; it wires one delegated pair of
   // listeners instead (see the el.grid listeners below `appendGridPage`) and
@@ -649,8 +662,44 @@ function matchesFilter(book) {
     case 'new': return bookStatus(book.id) === 'new';
     case 'ebook': return Boolean(book.hasEbook);
     case 'fullcast': return Boolean(book.fullCast);
+    case 'problems': return hasReadProblem(book);
     default: return true;
   }
+}
+
+function hasReadProblem(book) {
+  return Boolean(book?.tagsFailed || book?.detailFailed);
+}
+
+/**
+ * Plain-language explanation of a scan read failure (tagsFailed /
+ * detailFailed, see toClientBook) — without it a tagsFailed book just reads
+ * "Unknown author" with nothing saying why. Null when there's nothing wrong.
+ */
+function readProblemText(book) {
+  if (book?.tagsFailed && book?.detailFailed) return "This file's tags, cover and chapters couldn't be read.";
+  if (book?.tagsFailed) return "This file's tags couldn't be read, so its title and author may be guesses from the file name.";
+  if (book?.detailFailed) return "This file's cover and chapters couldn't be read.";
+  return null;
+}
+
+/**
+ * Shows the "Read problems" tab only while at least one book has one — an
+ * always-visible tab that's empty for almost every library would just be
+ * noise. If it disappears while selected (a retry fixed everything), fall
+ * back to All rather than leaving an empty grid behind a hidden tab.
+ */
+function updateReadProblemsUI() {
+  const count = state.books.reduce((n, b) => n + (hasReadProblem(b) ? 1 : 0), 0);
+  el.problemsFilterTab.classList.toggle('hidden', count === 0);
+  el.problemsFilterTab.textContent = count ? `Read problems (${count.toLocaleString()})` : 'Read problems';
+  if (!count && state.filter === 'problems') {
+    state.filter = 'all';
+    for (const t of el.filterTabs.querySelectorAll('.filter-tab')) {
+      t.classList.toggle('active', t.dataset.filter === 'all');
+    }
+  }
+  return count;
 }
 
 /** A separate, independent dimension from matchesFilter — a book must pass both. */
@@ -774,6 +823,34 @@ function renderFoldersMenu() {
     remove.addEventListener('click', () => removeFolder(folder, n));
 
     li.append(info, remove);
+    el.foldersList.append(li);
+  }
+
+  // Failed reads are never retried automatically (a genuinely broken file
+  // would otherwise be re-parsed on every launch), so this is where the user
+  // can ask again — e.g. after fixing a file or reconnecting a flaky drive.
+  const problemCount = state.books.reduce((n, b) => n + (hasReadProblem(b) ? 1 : 0), 0);
+  if (problemCount) {
+    const li = document.createElement('li');
+    li.className = 'folders-problems';
+    const text = document.createElement('div');
+    text.className = 'folders-problems-text';
+    text.textContent = `${problemCount.toLocaleString()} book${problemCount === 1 ? '' : 's'} couldn't be read fully.`;
+    const retry = document.createElement('button');
+    retry.className = 'btn folders-retry';
+    retry.textContent = 'Retry books with read problems';
+    retry.disabled = lastScanProgress.scanning;
+    retry.addEventListener('click', async () => {
+      retry.disabled = true;
+      const result = await window.api.retryFailedBooks().catch((err) => ({ ok: false, error: err.message }));
+      if (!result.ok) {
+        showToast(result.error || 'Could not retry those books.');
+        retry.disabled = false;
+        return;
+      }
+      showToast(`Retrying ${result.count.toLocaleString()} book${result.count === 1 ? '' : 's'}…`);
+    });
+    li.append(text, retry);
     el.foldersList.append(li);
   }
 }
@@ -1455,6 +1532,10 @@ function renderBookHeader(book) {
   el.bookSub.textContent = bits.join(' · ');
 
   el.fullCastBadge.classList.toggle('hidden', !book.fullCast);
+
+  const problem = readProblemText(book);
+  el.bookProblem.textContent = problem ? `${problem} Folders → Retry books with read problems tries again.` : '';
+  el.bookProblem.classList.toggle('hidden', !problem);
 
   el.bookDesc.textContent = book.description || '';
   el.bookDesc.classList.toggle('hidden', !book.description);
@@ -3101,9 +3182,20 @@ el.addFolderBtn.addEventListener('click', () => window.api.addFolder()
 el.emptyAddBtn.addEventListener('click', () => window.api.addFolder()
   .then(applyState)
   .catch((err) => reportFolderError('add that folder', err)));
-el.rescanBtn.addEventListener('click', () => window.api.rescan()
-  .then(applyState)
-  .catch((err) => reportFolderError('rescan the library', err)));
+// Doubles as "Cancel scan" while a scan is running (see onScanProgress below)
+// rather than sitting disabled — a scan started by accident on a large
+// library used to hold this button hostage until it finished.
+el.rescanBtn.addEventListener('click', () => {
+  if (lastScanProgress.scanning) {
+    el.rescanBtn.disabled = true; // until the scan actually stops
+    el.rescanBtn.textContent = 'Cancelling…';
+    window.api.cancelScan().catch(() => {});
+    return;
+  }
+  window.api.rescan()
+    .then(applyState)
+    .catch((err) => reportFolderError('rescan the library', err));
+});
 
 /** Undo side of "Reset progress": puts the exact prior position/speed back. */
 async function restoreProgress(book, previous) {
@@ -4465,6 +4557,7 @@ function applyState(next) {
   if (next.bookmarks) state.bookmarks = next.bookmarks;
   if (next.normalization) state.normalization = next.normalization;
   updateGenreFilterOptions();
+  updateReadProblemsUI();
 
   // Keep the open book in sync with rescanned data.
   if (state.current) {
@@ -4494,6 +4587,7 @@ function patchBooks(updated) {
   if (!updated?.length) return;
   const byId = new Map(updated.map((b) => [b.id, b]));
   state.books = state.books.map((b) => byId.get(b.id) ?? b);
+  updateReadProblemsUI(); // a background detail fill can newly fail (detailFailed) a book
 
   if (state.current && byId.has(state.current.id)) {
     const refreshed = byId.get(state.current.id);
@@ -4540,10 +4634,20 @@ function renderScanStatus() {
   }
 }
 
-window.api.onScanProgress(({ done, total, scanning }) => {
+window.api.onScanProgress(({ done, total, scanning, cancelled }) => {
+  const wasScanning = lastScanProgress.scanning;
   lastScanProgress = { done, total, scanning };
   renderScanStatus();
-  el.rescanBtn.disabled = scanning;
+  if (scanning && !wasScanning) {
+    el.rescanBtn.disabled = false;
+    el.rescanBtn.textContent = 'Cancel scan';
+    el.rescanBtn.title = 'Stop this scan — your library is left exactly as it was';
+  } else if (!scanning) {
+    el.rescanBtn.disabled = false;
+    el.rescanBtn.textContent = 'Rescan';
+    el.rescanBtn.title = '';
+    if (cancelled) showToast('Scan cancelled — your library was left as it was.');
+  }
 
   el.scanProgressBar.classList.toggle('hidden', !scanning);
   el.scanProgressBar.classList.toggle('indeterminate', scanning && !total);

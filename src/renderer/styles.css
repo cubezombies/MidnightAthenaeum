@@ -176,6 +176,12 @@ body {
 .folder-remove:hover { background: var(--danger-bg); color: var(--danger-text); }
 
 .folders-add { align-self: stretch; text-align: center; }
+.folders-problems {
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 6px; padding: 8px 6px 2px; border-top: 1px solid var(--line);
+}
+.folders-problems-text { color: var(--danger-text); font-size: 12px; }
+.folders-retry { align-self: flex-start; font-size: 12px; }
 
 input[type="search"] {
   background: var(--bg-elev-2);
@@ -371,6 +377,16 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
   box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
 }
 .full-cast-badge ~ .audible-badge { bottom: 30px; }
+
+/* Scan read failure (tagsFailed/detailFailed) — inline in the card's author
+   line, see buildCard in app.js for why it isn't a corner badge. */
+.card-problem { color: var(--danger-text); margin-right: 4px; }
+.card-problem .icon { width: 12px; height: 12px; vertical-align: -1px; }
+
+.book-problem {
+  margin: 6px 0 0; padding: 6px 10px; border-radius: 7px;
+  background: var(--danger-bg); color: var(--danger-text); font-size: 12px;
+}
 
 /* Book view — an inline tag rather than an overlay badge, since the book
    cover there is large and not corner-badge territory the way a grid card is. */

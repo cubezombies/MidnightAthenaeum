@@ -267,6 +267,8 @@ installer assumes for anyone else).
   ebook-pairings.json     book <-> EPUB pairings for Read along
   transcripts\            per-book Whisper transcripts
   diagnostic.log          scan progress and unexpected-shutdown diagnostics
+  scan-state.json         when the last full (deep) scan completed
+  session.json            present only while the app runs (see below)
 ```
 
 Scanning happens in two phases. The first pass reads just tags and duration —
@@ -275,6 +277,24 @@ single-file `.m4b`/`.m4a` books) chapter extraction to a low-priority
 background pass afterward, which resumes automatically if interrupted and
 jumps the queue for whatever book you open first. Results are cached against
 each file's size and mtime, so rescans only reparse what changed.
+
+Routine launch scans take a fast path that only checks each book's folder,
+which can miss a file re-tagged in place under the same name. **Rescan**
+always does the full per-file check, and a launch scan does it on its own
+once a week, so a library edited outside the app catches up either way.
+While any scan is running, the Rescan button becomes **Cancel scan** —
+cancelling leaves your library exactly as it was before the scan started.
+
+Books whose files couldn't be read (a permission problem, a file locked by
+another program, a flaky drive) are flagged rather than silently showing up
+as "Unknown author": a warning icon on the card, an explanation in the book
+view, and a **Read problems** filter tab that appears only while there are
+any. **Folders → Retry books with read problems** tries them again.
+
+If the app ever crashes or is closed some other way than quitting normally,
+the next launch says so and offers to show `diagnostic.log` — attaching it
+to a bug report makes the problem much easier to track down. (`session.json`
+is how it knows: it's removed on every normal quit.)
 
 ### Backup and restore
 
@@ -539,8 +559,8 @@ Midnight Athenaeum's side.
 
 The library opens with a **Continue listening** shelf — the books you're partway
 through, most-recently-played first, one click from resuming. Filter tabs (All /
-In progress / Finished / Not started / Has ebook / Full cast) narrow the grid
-below, and a **Genre** dropdown next to Sort — populated from whatever genre
+In progress / Finished / Not started / Has ebook / Full cast, plus Read problems
+when any book has one) narrow the grid below, and a **Genre** dropdown next to Sort — populated from whatever genre
 tags are actually in your library, hidden entirely if none are — narrows it
 further on top of whichever tab is active; the search box also matches genre
 text. Each book remembers its own **playback speed**, and resuming after a
