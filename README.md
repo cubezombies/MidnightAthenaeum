@@ -251,7 +251,10 @@ wild stores chapters. On a real library it returned zero chapters for every file
 The parser here reads that track directly (with a fallback to Nero `chpl` atoms),
 which is both more robust and roughly 50× faster, since it does targeted reads
 instead of decoding the whole file. It also recovers chapters from files
-`music-metadata` refuses to parse at all.
+`music-metadata` refuses to parse at all — and, for those same files, the
+title, author, narrator and cover too (`readMp4Tags`), since a file whose
+tail is slightly truncated usually still has all of that intact near the
+start.
 
 **`.cue` fallback.** When a single-file book has no embedded chapters (a lone
 `.mp3`, or an `.m4b` that omits them) but ships a sibling `.cue` sheet, the
