@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
-const { readMp4Duration, readMp4Chapters } = require('./mp4-chapters');
+const { readMp4Duration, readMp4Chapters, readMp4Tags } = require('./mp4-chapters');
 const { chaptersFromCue, hasSiblingCue } = require('./cue');
 const { naturalCompare } = require('./group');
 
@@ -62,6 +62,20 @@ async function readTags(filePath, wantCover) {
   } catch (err) {
     // Some files have malformed tables music-metadata refuses; we still want them.
     console.warn(`[parse-core] tag read failed for ${path.basename(filePath)}: ${err.message}`);
+    // music-metadata 11.16+ rejects an MP4 outright if any top-level box runs
+    // past end-of-file -- a slightly truncated trailing `mdat` is enough --
+    // even though the tags themselves, in `moov` near the front, are intact.
+    // Measured on a real ~6,800-file library: 12 files that 11.15 read fine,
+    // 9 of them losing a real title/author. Read the iTunes tags ourselves
+    // before giving up. Duration isn't needed here: single-file books already
+    // fall back to readMp4Duration, and chapters/cover come from phase 2.
+    if (/\.(m4b|m4a|mp4)$/i.test(filePath)) {
+      const common = await readMp4Tags(filePath, { wantCover });
+      if (common) {
+        console.warn(`[parse-core] used the built-in MP4 tag reader for ${path.basename(filePath)}`);
+        return { common, format: {} };
+      }
+    }
     return { common: {}, format: {}, failed: true };
   }
 }

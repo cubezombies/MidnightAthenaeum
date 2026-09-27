@@ -426,6 +426,95 @@ async function readMp4Chapters(filePath, knownDuration) {
   return result ?? { chapters: [], duration: knownDuration ?? 0 };
 }
 
+// Every read in readMp4Tags is capped by these rather than by the size a box
+// declares. This reads untrusted files, and trusting declared sizes is
+// exactly the memory-exhaustion class music-metadata 11.16 hardened against;
+// a fallback for when that parser gives up mustn't reopen it.
+const MAX_TAG_TEXT_BYTES = 64 * 1024;
+const MAX_TAG_COVER_BYTES = 16 * 1024 * 1024;
+const MAX_TAG_ITEMS = 256;
+
+// iTunes-style `ilst` item -> the music-metadata `common` field parse-core.js
+// reads. '©' is the copyright-sign first byte of the four-char codes.
+const ILST_TEXT_FIELDS = {
+  '©nam': 'title',
+  '©alb': 'album',
+  '©ART': 'artist',
+  aART: 'albumartist',
+  '©wrt': 'composer',
+  '©day': 'year',
+  '©gen': 'genre',
+  '©cmt': 'comment',
+};
+
+/** A `data` box payload: 4-byte type indicator, 4-byte locale, then the value. */
+function decodeIlstText(buf) {
+  if (buf.length < 8) return '';
+  const type = buf.readUInt32BE(0) & 0xffffff;
+  const body = buf.subarray(8);
+  const text = type === 2 ? Buffer.from(body).swap16().toString('utf16le') : body.toString('utf8');
+  return text.replace(/\0+$/, '').trim();
+}
+
+/**
+ * Title/author/narrator/genre/year/description (and optionally the cover)
+ * straight from `moov/udta/meta/ilst`, returned in music-metadata's `common`
+ * shape so parse-core.js can use it unchanged. Only a fallback, for files
+ * music-metadata rejects outright: as of 11.16 it refuses any MP4 whose
+ * top-level boxes run past end-of-file, and a real library has a handful of
+ * slightly truncated or damaged files (a trailing `mdat` a few bytes short)
+ * whose metadata, sitting in `moov` near the front, is perfectly intact.
+ * Returns null when there's no metadata box to read.
+ */
+async function readMp4Tags(filePath, { wantCover = false } = {}) {
+  return withMoov(filePath, async (reader, moov) => {
+    const meta = await reader.descend(moov, ['udta', 'meta']);
+    if (!meta) return null;
+
+    // `meta` is normally a full box (4 bytes of version/flags before its
+    // children), but QuickTime-style files omit them; tell the two apart by
+    // where the first child's type code sits.
+    const probe = await reader.content(meta, 16);
+    const childStart = probe.toString('latin1', 4, 8) === 'hdlr' ? meta.contentStart : meta.contentStart + 4;
+    const metaKids = await reader.children(childStart, meta.contentEnd);
+    const ilst = metaKids.find((b) => b.type === 'ilst');
+    if (!ilst) return null;
+
+    const common = {};
+    const items = (await reader.children(ilst.contentStart, ilst.contentEnd)).slice(0, MAX_TAG_ITEMS);
+    for (const item of items) {
+      const field = ILST_TEXT_FIELDS[item.type];
+      if (!field && !(wantCover && item.type === 'covr')) continue;
+      const data = await reader.find(item, 'data');
+      if (!data) continue;
+
+      if (item.type === 'covr') {
+        if (common.picture || data.contentEnd - data.contentStart > MAX_TAG_COVER_BYTES + 8) continue;
+        const buf = await reader.content(data, MAX_TAG_COVER_BYTES + 8);
+        const image = buf.subarray(8);
+        const kind = sniffImage(image);
+        if (kind) common.picture = [{ format: kind.ext === '.png' ? 'image/png' : 'image/jpeg', data: image }];
+        continue;
+      }
+
+      if (common[field] !== undefined) continue; // first value wins, like music-metadata
+      const text = decodeIlstText(await reader.content(data, MAX_TAG_TEXT_BYTES + 8));
+      if (!text) continue;
+      if (field === 'year') {
+        const year = Number(text.slice(0, 4));
+        if (Number.isInteger(year) && year > 0) common.year = year;
+      } else if (field === 'composer' || field === 'genre') {
+        common[field] = [text];
+      } else if (field === 'comment') {
+        common.comment = [{ text }];
+      } else {
+        common[field] = text;
+      }
+    }
+    return Object.keys(common).length ? common : null;
+  });
+}
+
 /** Back-compat wrapper for callers that want both in one call (e.g. extractMp4Chapters below). */
 async function readMp4Info(filePath) {
   return readMp4Chapters(filePath);
@@ -436,5 +525,5 @@ async function extractMp4Chapters(filePath) {
 }
 
 module.exports = {
-  extractMp4Chapters, readMp4Info, readMp4Duration, readMp4Chapters,
+  extractMp4Chapters, readMp4Info, readMp4Duration, readMp4Chapters, readMp4Tags,
 };

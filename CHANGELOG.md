@@ -7,6 +7,22 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+### Security
+- Updated the Electron runtime to 43.7.5 (more upstream Chromium security
+  fixes, plus a Windows fix for windows that could fail to appear).
+- Updated the audio-tag reader (`music-metadata` 11.16.1), which adds several
+  protections against deliberately malformed files.
+
+### Fixed
+- That tag-reader update is stricter about damaged `.m4b`/`.m4a` files: a file
+  whose end is slightly truncated would have lost its title, author, narrator
+  and cover entirely, even though that information is intact near the start
+  of the file. The app now reads those details itself when this happens.
+  Checked against a real 6,800-file library: of the 12 damaged files it
+  affected, every one that had readable details keeps them, and two that
+  previously showed no details at all now show their real title, author and
+  cover. (The twelfth is damaged right from its first byte; it never had
+  readable details and is now listed under Read problems.)
 
 ## [0.23.1] - 2026-09-24
 ### Security
