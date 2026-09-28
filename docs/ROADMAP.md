@@ -1451,6 +1451,13 @@ run in CI as written — it `require`s Playwright from a hard-coded local npx
 cache path (`D:\npm\cache\_npx\…`) — so it needs Playwright as a real
 devDependency first.
 
+Pair it with a branch-protection rule that **requires** that check before
+merging. On 2026-09-27 an untested Dependabot PR (#13: discord-rpc 1.5.1 plus
+music-metadata 11.16.1 *without* the tag fallback) was merged by mistake in
+place of the intended PR (#14), by assuming the next PR number instead of
+reading it back; it was reverted before any release. A required check
+wouldn't catch every wrong merge, but it would have blocked that one.
+
 ### 2. Automate winget submissions — **S**
 The package exists (`cubezombies.MidnightAthenaeum`), but updates have come
 from a third-party auto-submit bot (it submitted 0.16.2, 0.17.0, 0.18.0 and
@@ -1479,6 +1486,12 @@ two-track fixture). They lived in a scratch folder, not the repo, so none of
 it is re-runnable. Move them into `scripts/e2e/` with their fixture
 generators (ffmpeg-generated tones, the ACL trick) and run the fast ones in #1.
 
+Add the two checks that caught the music-metadata 11.16 regression, as a
+standard gate for any tag-reader update: a before/after tag snapshot of a
+fixed sample of real files (diffing exactly the fields `parse-core.js`
+uses), and the header-only scan for MP4 boxes that overrun end-of-file.
+Both need the real library, so they're local checks, not CI ones.
+
 ### 5. Code signing — **M** (plus a running cost)
 The unsigned installer triggers SmartScreen's "unrecognized publisher"
 warning on every download, which the README has to explain away. Options:
@@ -1486,6 +1499,39 @@ Azure Trusted Signing (low monthly cost, identity validation required) or
 SignPath Foundation (free for open-source projects, application-based). A
 decision for the maintainer rather than an engineering task — electron-builder
 supports both.
+
+### 6. Repair the local build environment — **S** (maintainer machine)
+This machine can't compile native modules: Visual Studio is installed (a
+2022 folder and an "18" folder), but its Visual Studio Installer — and with it
+`vswhere.exe`, which `node-gyp` uses to find Visual Studio — is missing, so
+every `@vscode/sqlite3` build fails with *"Could not find any Visual Studio
+installation to use"*. Local packs only work because a previously compiled
+`vscode-sqlite3.node` sits in `node_modules`, marked as built for Electron's
+ABI 148 (`build/Release/.forge-meta`) so electron-builder reuses it instead
+of rebuilding; a backup is in `D:\Claude\scratch\sqlite3-build-backup`. Any
+clean install (`npm ci`, or wiping `node_modules`) deletes it and breaks local
+builds again, and the next Electron *major* (new ABI) will need a real
+rebuild regardless. Fix: repair or reinstall the Visual Studio Installer
+(with the "Desktop development with C++" workload), then confirm with a clean
+`npm ci` + `npm run pack`. CI is unaffected.
+
+### 7. Pending dependency: `@xhayper/discord-rpc` 1.3.4 → 1.5.1 — **S**
+Came in with the mistakenly merged #13, reverted untested; Dependabot should
+re-propose it (it runs weekly). Its notes remove the WebSocket transport —
+the app only calls `new RPC.Client({ clientId })` with the default (IPC)
+transport, so that should be moot — plus a new health-check feature and
+several connection fixes. Test before merging: the module loads, "Discord not
+running" still fails fast within the existing timeout/cooldown, and — with a
+real Discord Application ID set — presence appears and updates on chapter
+change and play/pause.
+
+### 8. Report the music-metadata strictness regression upstream — **S**
+11.16.x rejects an entire MP4 when any top-level box overruns end-of-file,
+even when `moov` (all the metadata) is intact near the front; 11.15 read the
+same files. The app now works around it (`readMp4Tags`), but an upstream fix
+would remove the need and help everyone else. A public issue on
+Borewit/music-metadata, so the maintainer's call; the repro is simple (take
+any `.m4b` with metadata, truncate its last few bytes).
 
 ---
 
@@ -1546,28 +1592,34 @@ Everything in the original sequencing plan has shipped — all of Tier 1 and
 Tier 2, Reliability #2–#5, and the waveform. What's left, ordered by value
 against effort:
 
-1. **New candidates #1 and #2** (dialog defaults, shortcuts after seeking) —
+1. **Repair the local build environment** (Distribution & tooling #6) — a
+   maintainer task, not code, but everything local depends on it: until
+   it's fixed, one clean install breaks local builds.
+2. **New candidates #1 and #2** (dialog defaults, shortcuts after seeking) —
    small, user-visible papercuts.
-2. **CI on pull requests + lint + CodeQL + keeping the e2e checks**
-   (Distribution & tooling #1, #3, #4) — this cycle's Dependabot PRs arrived
-   with zero checks; this is what makes dependency updates safe to merge
-   without a manual test session each time.
-3. **Automate winget submissions** (Distribution & tooling #2).
-4. **Incremental scan via file watcher** (Performance #4) — with rescans
+3. **CI on pull requests (with a required check) + lint + CodeQL + keeping
+   the e2e checks** (Distribution & tooling #1, #3, #4) — Dependabot PRs
+   arrive with zero checks; this is what makes dependency updates safe to
+   merge without a manual test session each time, and what would have
+   blocked the mistaken #13 merge. Test the pending discord-rpc 1.5.1 update
+   (Distribution & tooling #7) whenever Dependabot re-proposes it.
+4. **Automate winget submissions** (Distribution & tooling #2).
+5. **Incremental scan via file watcher** (Performance #4) — with rescans
    ~3s, the remaining annoyance is having to trigger one at all.
-5. **Sidecar metadata** (Tier 3 #2) — narrator + description from `.nfo`,
+6. **Sidecar metadata** (Tier 3 #2) — narrator + description from `.nfo`,
    `series` from co-located `.abs`/`.opf`; the best remaining metadata win for
    this library specifically.
-6. **Small features by appetite** — chapter progress, bookmark export,
+7. **Small features by appetite** — chapter progress, bookmark export,
    waveform prefetch (New candidates #3–#5), then collections (#6).
-7. **Query-per-view** (Performance #1, the open half) — the real ceiling for
+8. **Query-per-view** (Performance #1, the open half) — the real ceiling for
    very large libraries; changes the interaction model, so its own pass.
-8. **Bigger features** — auto-generated chapters (Tier 3 #3, now with the
+9. **Bigger features** — auto-generated chapters (Tier 3 #3, now with the
    waveform as a cheap first pass), the mini-player (New candidates #7),
    transcript-aligned read-along (Tier 2 #6's future work).
 
-Code signing (Distribution & tooling #5) is a maintainer decision about cost
-rather than something to sequence.
+Code signing (Distribution & tooling #5) and filing the music-metadata issue
+upstream (Distribution & tooling #8) are maintainer decisions rather than
+things to sequence.
 
 ---
 

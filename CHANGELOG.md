@@ -7,6 +7,8 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+
+## [0.23.2] - 2026-09-28
 ### Security
 - Updated the Electron runtime to 43.7.5 (more upstream Chromium security
   fixes, plus a Windows fix for windows that could fail to appear).
