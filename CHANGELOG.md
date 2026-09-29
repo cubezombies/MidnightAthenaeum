@@ -7,6 +7,11 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+### Security
+- Patched a denial-of-service advisory in `undici` (GHSA-3wwx-pv8p-q78v),
+  a networking library used by the Discord Rich Presence integration and the
+  build tooling. The app never used the affected WebSocket code, so this was
+  not exploitable in practice; updated anyway.
 
 ## [0.23.2] - 2026-09-28
 ### Security
