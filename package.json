@@ -32,11 +32,14 @@
     "music-metadata": "^11.16.1"
   },
   "overrides": {
+    "@electron/get": {
+      "undici": "^7.29.1"
+    },
     "@discordjs/rest": {
-      "undici": "^6.28.0"
+      "undici": "^6.28.1"
     },
     "node-gyp": {
-      "undici": "^6.28.0"
+      "undici": "^6.28.1"
     },
     "ajv": {
       "fast-uri": "^3.1.6"
