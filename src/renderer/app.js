@@ -3851,7 +3851,9 @@ async function fetchSpineHtml(bookId, spineHref) {
   if (state.readAlongHtmlCache.has(key)) return state.readAlongHtmlCache.get(key);
   const result = await window.api.getEbookSpineHtml({ bookId, spineHref });
   const html = result?.html ?? null;
-  state.readAlongHtmlCache.set(key, html);
+  // A failed read isn't cached, so a transient error doesn't leave this
+  // chapter blank for the rest of the session.
+  if (html !== null) state.readAlongHtmlCache.set(key, html);
   return html;
 }
 
@@ -3918,7 +3920,15 @@ async function pickAndPairEbook(book) {
     return false;
   }
   state.readAlong.pairing = { status: 'matched', epubPath: result.pairing.epubPath, source: 'manual' };
-  state.readAlongTocCache.delete(book.id); // a re-pick invalidates whatever was cached for the old epub
+  // A re-pick invalidates everything cached for the old epub: its table of
+  // contents and its chapter text. The text cache is keyed by spine href,
+  // and two different epubs (e.g. both Calibre conversions) can easily share
+  // hrefs like `text/part0005.html`, so stale entries would show the old
+  // book's text under the new pairing.
+  state.readAlongTocCache.delete(book.id);
+  for (const key of [...state.readAlongHtmlCache.keys()]) {
+    if (key.startsWith(`${book.id}::`)) state.readAlongHtmlCache.delete(key);
+  }
   return true;
 }
 

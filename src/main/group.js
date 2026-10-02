@@ -189,7 +189,45 @@ function consolidatePartedFolders(units) {
   return [...units.filter((u) => !consumed.has(u)), ...merged];
 }
 
+/**
+ * Whether a book can treat its `sourceDir` as its own — safe to send to the
+ * Recycle Bin whole (delete with files) or rename wholesale (reorganize).
+ *
+ * "No other book has exactly this folder" is NOT enough, and was once the
+ * whole test: a folder can also contain other books in subfolders beneath
+ * it — audio files loose in an author folder that also has per-book
+ * subfolders, or a parted-folder book (consolidatePartedFolders) whose
+ * sourceDir is the shared parent of its parts. Measured on a real
+ * ~9,400-book library: 36 books passed the old test while other books
+ * lived inside their folder, one of them with 51 others beneath it.
+ *
+ * Build the index once per library snapshot (O(books × depth)); each lookup
+ * is then O(1). Paths compare case-insensitively, as Windows does.
+ */
+function buildFolderOwnershipIndex(books) {
+  const exact = new Map();
+  const nested = new Map(); // dir -> number of books whose sourceDir is strictly inside it
+  for (const b of books) {
+    const dir = path.resolve(b.sourceDir).toLowerCase();
+    exact.set(dir, (exact.get(dir) || 0) + 1);
+    let parent = path.dirname(dir);
+    let child = dir;
+    while (parent !== child) {
+      nested.set(parent, (nested.get(parent) || 0) + 1);
+      child = parent;
+      parent = path.dirname(parent);
+    }
+  }
+  return { exact, nested };
+}
+
+function ownsFolderExclusively(index, sourceDir) {
+  const dir = path.resolve(sourceDir).toLowerCase();
+  return index.exact.get(dir) === 1 && !index.nested.get(dir);
+}
+
 module.exports = {
   groupIntoBooks, naturalCompare, stripDiscSuffix, looksLikeDisc,
   parsePartOfTotal, consolidatePartedFolders,
+  buildFolderOwnershipIndex, ownsFolderExclusively,
 };

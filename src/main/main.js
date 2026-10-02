@@ -216,6 +216,7 @@ const { JsonStore } = require('./store');
 const { LibraryDb } = require('./db');
 const library = require('./library');
 const { scanLibrary, ScanCancelledError, hashId } = library;
+const { buildFolderOwnershipIndex, ownsFolderExclusively } = require('./group');
 const { registerScheme, registerMediaProtocol, mediaUrl } = require('./media-protocol');
 const { searchOpenLibrary, fetchWorkDescription, downloadCover } = require('./metadata-lookup');
 const updater = require('./updater');
@@ -1421,8 +1422,24 @@ function deepScanDue() {
  * added, or the weekly automatic deep scan; it's what gates the Audible
  * decrypt offer, which should only ever appear in response to the user.
  */
-async function runScan({ deep = false, explicit = false } = {}) {
+async function runScan(options = {}) {
   if (scanning) return;
+  // Claimed synchronously, before the first await below: the body awaits
+  // the background fills stopping before it reads its snapshot, and a second
+  // runScan arriving in that window (launch scan + a Rescan click, or a
+  // folder being added) used to pass the guard too, run a whole second scan
+  // in parallel, and overwrite the first one's result. The cancel token is
+  // created here too, so a Cancel during that window reaches this scan.
+  scanning = true;
+  scanCancelToken = { cancelled: false };
+  try {
+    await runScanBody(options, scanCancelToken);
+  } finally {
+    scanning = false; // also covers the body's early returns
+  }
+}
+
+async function runScanBody({ deep = false, explicit = false }, cancelToken) {
   await stopDetailFill(); // phase 2 must fully quiesce before we read the cache snapshot below
   await stopPairingFill();
   await stopThumbnailFill();
@@ -1460,9 +1477,6 @@ async function runScan({ deep = false, explicit = false } = {}) {
     ? state.books.filter((b) => badFolders.some((f) => isInsideFolder(f, b.sourceDir)))
     : [];
 
-  scanning = true;
-  scanCancelToken = { cancelled: false };
-  const cancelToken = scanCancelToken;
   let cancelled = false;
   let completed = false;
   sendProgress('library:scan-progress', { done: 0, total: 0, scanning: true }, { force: true });
@@ -2291,7 +2305,7 @@ function registerIpc() {
     const book = state.books.find((b) => b.id === bookId);
     if (!book) return { ok: false, error: 'Book not found.' };
 
-    const exclusiveDir = state.books.filter((b) => b.sourceDir === book.sourceDir).length === 1;
+    const exclusiveDir = ownsFolderExclusively(buildFolderOwnershipIndex(state.books), book.sourceDir);
     const results = await duplicates.trashBookFiles(book, {
       epubPath: pairingStore.get()[bookId]?.epubPath,
       exclusiveDir,
@@ -2329,7 +2343,7 @@ function registerIpc() {
 
     let partial = false;
     if (deleteFiles) {
-      const exclusiveDir = state.books.filter((b) => b.sourceDir === book.sourceDir).length === 1;
+      const exclusiveDir = ownsFolderExclusively(buildFolderOwnershipIndex(state.books), book.sourceDir);
       const results = await duplicates.trashBookFiles(book, {
         epubPath: pairingStore.get()[bookId]?.epubPath,
         exclusiveDir,
@@ -2469,8 +2483,19 @@ function registerIpc() {
     } catch {
       idMap = {};
     }
-    for (const [newId, oldId] of Object.entries(idMap)) remapIdKeyedStores(newId, oldId);
-    fs.rmSync(REORG_ID_MAP_FILE, { force: true });
+    // Carry data back only for books that actually moved back. A book whose
+    // files are still at the new location keeps its new id after the rescan
+    // below, so remapping its progress/bookmarks to the old id would orphan
+    // them. Its idMap entry is kept so a retried Undo can still finish it.
+    // (failedBookIds is null for a pre-0.23.3 journal: no per-book record.)
+    const stillMoved = new Set(result.failedBookIds ?? []);
+    const remaining = {};
+    for (const [newId, oldId] of Object.entries(idMap)) {
+      if (result.failedBookIds && stillMoved.has(oldId)) remaining[newId] = oldId;
+      else remapIdKeyedStores(newId, oldId);
+    }
+    if (Object.keys(remaining).length) fs.writeFileSync(REORG_ID_MAP_FILE, JSON.stringify(remaining), 'utf8');
+    else fs.rmSync(REORG_ID_MAP_FILE, { force: true });
     progressStore.flushSync();
     bookmarksStore.flushSync();
     normalizationStore.flushSync();
@@ -2527,9 +2552,20 @@ function normalizeCoverPaths(libraryState) {
   const books = (libraryState.books ?? []).map((book) => {
     const cover = repoint(book.cover);
     const coverThumb = repoint(book.coverThumb);
-    if (cover === book.cover && coverThumb === book.coverThumb) return book;
+    // Per-chapter artwork (`<id>-chN.jpg`, see mp4-chapters.js's
+    // readChapterImages) lives in the same cache and stores absolute paths
+    // the same way, so it needs the same repointing.
+    let chaptersChanged = false;
+    const chapters = (book.chapters ?? []).map((ch) => {
+      if (!ch.image) return ch;
+      const image = repoint(ch.image);
+      if (image === ch.image) return ch;
+      chaptersChanged = true;
+      return { ...ch, image };
+    });
+    if (cover === book.cover && coverThumb === book.coverThumb && !chaptersChanged) return book;
     changed += 1;
-    return { ...book, cover, coverThumb };
+    return { ...book, cover, coverThumb, chapters: chaptersChanged ? chapters : book.chapters };
   });
   if (changed) console.log(`[library] repointed ${changed} cover path(s) to ${COVER_CACHE}`);
   return { books, changed: changed > 0 };

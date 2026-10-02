@@ -124,6 +124,16 @@ async function readTrackInfo(reader, trak) {
   return info;
 }
 
+// Sample tables here are only ever read for chapter tracks (text titles and
+// chapter artwork: one sample per chapter), so a real one has hundreds of
+// entries at most — the longest book in the dev library has 212 chapters.
+// The counts below come straight from the file, and stts run-lengths and a
+// uniform-size stsz's count can each claim ~4 billion samples in a handful
+// of bytes; expanding that unchecked hung the main process allocating an
+// array of billions. Capping at the expansion keeps a corrupt or crafted
+// file to a bounded, fast read like every other box read in this file.
+const MAX_TABLE_SAMPLES = 100_000;
+
 function parseStts(buf) {
   const count = buf.readUInt32BE(4);
   const deltas = [];
@@ -131,14 +141,16 @@ function parseStts(buf) {
   for (let i = 0; i < count && offset + 8 <= buf.length; i += 1, offset += 8) {
     const sampleCount = buf.readUInt32BE(offset);
     const sampleDelta = buf.readUInt32BE(offset + 4);
-    for (let s = 0; s < sampleCount; s += 1) deltas.push(sampleDelta);
+    const take = Math.min(sampleCount, MAX_TABLE_SAMPLES - deltas.length);
+    for (let s = 0; s < take; s += 1) deltas.push(sampleDelta);
+    if (deltas.length >= MAX_TABLE_SAMPLES) break;
   }
   return deltas;
 }
 
 function parseStsz(buf) {
   const uniformSize = buf.readUInt32BE(4);
-  const count = buf.readUInt32BE(8);
+  const count = Math.min(buf.readUInt32BE(8), MAX_TABLE_SAMPLES);
   if (uniformSize !== 0) return new Array(count).fill(uniformSize);
   const sizes = [];
   let offset = 12;
