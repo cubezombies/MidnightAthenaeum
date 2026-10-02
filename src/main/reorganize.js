@@ -20,13 +20,21 @@
  * unrelated single-file books side by side (four different Alien audio
  * dramas in one "Radio and Podcast Production" folder) — renaming a shared
  * folder would silently relocate books that were never part of the plan, so
- * a shared folder always moves only this book's own files instead.
+ * a shared folder always moves only this book's own files instead. "Owns"
+ * also means no other book lives in a subfolder beneath it (see group.js's
+ * ownsFolderExclusively) — a folder holding loose audio plus other books'
+ * subfolders is just as shared.
+ *
+ * No move ever overwrites an existing file (see moveOne), and a book whose
+ * move fails part-way is rolled back, so each book ends either fully moved
+ * or not moved at all — never split across two folders.
  */
 
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { REORG_JOURNAL_FILE } = require('./paths');
+const { buildFolderOwnershipIndex, ownsFolderExclusively } = require('./group');
 
 const ILLEGAL_WIN_CHARS = /[<>:"/\\|?*\x00-\x1f]/g;
 
@@ -56,8 +64,7 @@ function findRoot(sourceDir, folders) {
 function computePlan(books, folders) {
   const plan = { moves: [], skipped: [], alreadyCorrectCount: 0 };
 
-  const dirCounts = new Map();
-  for (const b of books) dirCounts.set(b.sourceDir, (dirCounts.get(b.sourceDir) || 0) + 1);
+  const ownership = buildFolderOwnershipIndex(books);
 
   const claimedTargets = new Set();
 
@@ -81,19 +88,52 @@ function computePlan(books, folders) {
     }
     claimedTargets.add(targetDir.toLowerCase());
 
-    const exclusivelyOwnsSourceDir = dirCounts.get(book.sourceDir) === 1;
-    if (exclusivelyOwnsSourceDir && path.resolve(book.sourceDir) === path.resolve(targetDir)) {
+    const ownsSourceDir = ownsFolderExclusively(ownership, book.sourceDir);
+    if (ownsSourceDir && path.resolve(book.sourceDir) === path.resolve(targetDir)) {
       plan.alreadyCorrectCount += 1;
       continue;
+    }
+
+    const fromFiles = book.tracks.map((t) => t.filePath);
+    // A folder can't be renamed into its own subfolder (e.g. a book that
+    // owns `root\Author` and belongs at `root\Author\Title`), so that case
+    // moves its files instead.
+    const mode = ownsSourceDir && !isInside(book.sourceDir, targetDir) ? 'folder' : 'files';
+
+    // 'files' mode keeps each track's path relative to the book's folder
+    // (`CD1\01.mp3` stays `CD1\01.mp3`), so a disc- or part-merged book's
+    // same-named tracks in different subfolders can't land on the same
+    // destination; a track outside the folder (shouldn't happen) falls back
+    // to its bare name. Anything that would still collide is skipped rather
+    // than risked — Windows renames silently replace an existing file.
+    let toFiles = null;
+    if (mode === 'files') {
+      toFiles = fromFiles.map((f) => {
+        const rel = path.relative(book.sourceDir, f);
+        const safeRel = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : path.basename(f);
+        return path.join(targetDir, safeRel);
+      });
+      const seen = new Set();
+      const collides = toFiles.some((t) => {
+        const key = t.toLowerCase();
+        if (seen.has(key)) return true;
+        seen.add(key);
+        return false;
+      });
+      if (collides) {
+        plan.skipped.push({ id: book.id, title: book.title, author: book.author, reason: 'Two of its files would end up with the same name.' });
+        continue;
+      }
     }
 
     plan.moves.push({
       bookId: book.id,
       title: book.title,
       author: book.author,
-      mode: exclusivelyOwnsSourceDir ? 'folder' : 'files',
+      mode,
       fromDir: book.sourceDir,
-      fromFiles: book.tracks.map((t) => t.filePath),
+      fromFiles,
+      toFiles,
       toDir: targetDir,
     });
   }
@@ -101,50 +141,97 @@ function computePlan(books, folders) {
   return plan;
 }
 
+/** True when `child` is strictly inside `parent` (case-insensitive, as on Windows). */
+function isInside(parent, child) {
+  const rel = path.relative(path.resolve(parent).toLowerCase(), path.resolve(child).toLowerCase());
+  return Boolean(rel) && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/**
+ * Moves a file or folder, refusing to overwrite. `fs.rename` on Windows
+ * silently replaces an existing destination file, so a planning mistake (or
+ * something appearing at the destination between plan and execute) would
+ * otherwise destroy a real audio file with no Recycle Bin copy.
+ */
 async function moveOne(from, to) {
+  if (fs.existsSync(to)) {
+    const err = new Error(`Destination already exists: ${to}`);
+    err.code = 'EEXIST';
+    throw err;
+  }
   try {
     await fsp.rename(from, to);
   } catch (err) {
     if (err.code !== 'EXDEV') throw err;
     // Shouldn't happen (reorganizing within the same library root, same
     // drive) but handled defensively rather than assumed away.
-    await fsp.cp(from, to, { recursive: true });
+    await fsp.cp(from, to, { recursive: true, errorOnExist: true, force: false });
     await fsp.rm(from, { recursive: true, force: true });
   }
 }
 
 /**
- * Executes one book's move and returns the journal entries it produced.
- * 'folder' mode renames the whole (exclusively-owned) source folder in one
- * step, bringing along cover art / nfo files automatically. 'files' mode
- * moves only this book's own track files into a freshly created folder,
- * leaving everything else in the shared source folder untouched.
+ * Executes one book's move. 'folder' mode renames the whole (exclusively
+ * owned) source folder in one step, bringing along cover art / nfo files
+ * automatically. 'files' mode moves only this book's own track files into a
+ * freshly created folder, leaving everything else in the shared source
+ * folder untouched.
+ *
+ * Every individual move is journaled the moment it succeeds (tagged with the
+ * book's id, which undo uses to tell which books actually came back), so a
+ * crash mid-book still leaves an accurate record. If a later file fails, the
+ * files already moved are moved back and their journal entries removed, and
+ * the error is rethrown — the book ends up exactly where it started.
  */
 async function executeMove(move) {
   const entries = [];
-  if (move.mode === 'folder') {
-    await fsp.mkdir(path.dirname(move.toDir), { recursive: true });
-    await moveOne(move.fromDir, move.toDir);
-    entries.push({ type: 'folder', from: move.fromDir, to: move.toDir });
-  } else {
-    await fsp.mkdir(move.toDir, { recursive: true });
-    for (const filePath of move.fromFiles) {
-      const dest = path.join(move.toDir, path.basename(filePath));
-      // eslint-disable-next-line no-await-in-loop
-      await moveOne(filePath, dest);
-      entries.push({ type: 'file', from: filePath, to: dest });
+  const record = (entry) => {
+    const tagged = { ...entry, bookId: move.bookId };
+    appendJournal([tagged]);
+    entries.push(tagged);
+  };
+  try {
+    if (move.mode === 'folder') {
+      await fsp.mkdir(path.dirname(move.toDir), { recursive: true });
+      await moveOne(move.fromDir, move.toDir);
+      record({ type: 'folder', from: move.fromDir, to: move.toDir });
+    } else {
+      await fsp.mkdir(move.toDir, { recursive: true });
+      for (let i = 0; i < move.fromFiles.length; i++) {
+        const from = move.fromFiles[i];
+        const to = move.toFiles[i];
+        // eslint-disable-next-line no-await-in-loop
+        await fsp.mkdir(path.dirname(to), { recursive: true });
+        // eslint-disable-next-line no-await-in-loop
+        await moveOne(from, to);
+        record({ type: 'file', from, to });
+      }
     }
+  } catch (err) {
+    const notRestored = [];
+    for (const entry of [...entries].reverse()) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await moveOne(entry.to, entry.from);
+      } catch {
+        notRestored.push(entry);
+      }
+    }
+    // Only entries that really moved back leave the journal; anything that
+    // couldn't is kept, so File > Undo last reorganization can still try.
+    removeJournalEntries(entries.filter((e) => !notRestored.includes(e)));
+    if (notRestored.length) err.message += ` (and ${notRestored.length} already-moved file(s) could not be moved back; Undo will retry them)`;
+    throw err;
   }
   return entries;
 }
 
-/** New filePath for each of a book's tracks after a successful move, keyed by original path. */
-function remapTrackPaths(move, journalEntries) {
-  const map = new Map(journalEntries.filter((e) => e.type === 'file').map((e) => [e.from, e.to]));
+/** New filePath for each of a book's tracks after a successful move. */
+function remapTrackPaths(move) {
   if (move.mode === 'folder') {
     return move.fromFiles.map((f) => path.join(move.toDir, path.relative(move.fromDir, f)));
   }
-  return move.fromFiles.map((f) => map.get(f) || f);
+  return move.toFiles;
 }
 
 function readJournal() {
@@ -160,6 +247,14 @@ function appendJournal(entries) {
   existing.push(...entries);
   fs.mkdirSync(path.dirname(REORG_JOURNAL_FILE), { recursive: true });
   fs.writeFileSync(REORG_JOURNAL_FILE, JSON.stringify(existing), 'utf8');
+}
+
+/** Drops specific entries (by from/to/type identity) — used when a failed book's moves are rolled back. */
+function removeJournalEntries(entries) {
+  if (!entries.length) return;
+  const drop = new Set(entries.map((e) => `${e.type}\u0000${e.from}\u0000${e.to}`));
+  const kept = (readJournal() || []).filter((e) => !drop.has(`${e.type}\u0000${e.from}\u0000${e.to}`));
+  fs.writeFileSync(REORG_JOURNAL_FILE, JSON.stringify(kept), 'utf8');
 }
 
 function startJournal() {
@@ -214,9 +309,8 @@ async function executePlan(plan, onProgress) {
       if (cancelled) break;
       try {
         // eslint-disable-next-line no-await-in-loop
-        const entries = await executeMove(move);
-        appendJournal(entries);
-        const newPaths = remapTrackPaths(move, entries);
+        await executeMove(move); // journals as it goes; rolls itself back on failure
+        const newPaths = remapTrackPaths(move);
         pathUpdates[move.bookId] = { sourceDir: move.toDir, trackPaths: newPaths };
         moved.push(move.bookId);
       } catch (err) {
@@ -232,10 +326,17 @@ async function executePlan(plan, onProgress) {
   return { moved, failed, cancelledEarly: cancelled, pathUpdates };
 }
 
-/** Reverses every move in the last journal, most recent first. */
+/**
+ * Reverses every move in the last journal, most recent first. Entries that
+ * fail to move back stay in the journal (so Undo can be retried once, say, a
+ * file is no longer in use) instead of being forgotten. `failedBookIds` names
+ * the books that did not fully come back, so the caller doesn't carry their
+ * progress/bookmarks back to an id they no longer have; it is null for a
+ * journal written before entries carried a bookId, where that can't be told.
+ */
 async function undoLastReorganization(onProgress) {
   const journal = readJournal();
-  if (!journal || !journal.length) return { ok: true, errors: [], restored: [] };
+  if (!journal || !journal.length) return { ok: true, errors: [], restored: [], failedBookIds: [] };
 
   const errors = [];
   const restored = [];
@@ -252,8 +353,18 @@ async function undoLastReorganization(onProgress) {
     done += 1;
     onProgress?.({ done, total: reversed.length });
   }
-  clearJournal();
-  return { ok: errors.length === 0, errors, restored };
+
+  if (errors.length) {
+    const failedEntries = new Set(errors.map((e) => e.entry));
+    fs.writeFileSync(REORG_JOURNAL_FILE, JSON.stringify(journal.filter((e) => failedEntries.has(e))), 'utf8');
+  } else {
+    clearJournal();
+  }
+
+  const failedBookIds = errors.every((e) => e.entry.bookId)
+    ? [...new Set(errors.map((e) => e.entry.bookId))]
+    : null;
+  return { ok: errors.length === 0, errors, restored, failedBookIds };
 }
 
 module.exports = {

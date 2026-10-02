@@ -94,14 +94,15 @@ function findDuplicateGroups(books) {
 
 /**
  * Moves this book's files to the Recycle Bin — how much gets trashed depends
- * on `exclusiveDir` (the caller determines this from the full library: does
- * any *other* book share this book's sourceDir?):
+ * on `exclusiveDir` (the caller determines this from the full library with
+ * group.js's ownsFolderExclusively: no *other* book shares this book's
+ * sourceDir *or lives anywhere inside it*):
  *
  * - `exclusiveDir: true` — this book owns its folder outright, so the whole
  *   folder is trashed in one shot. This sweeps up anything else sitting in
  *   there too (cover art, an NFO file, show notes) that per-file trashing
  *   would otherwise leave behind and treat as "something else is still
- *   here" — since nothing else in the library points at this folder, there
+ *   here" — since no other book lives in this folder or beneath it, there
  *   is nothing else to protect.
  * - `exclusiveDir: false` (or omitted) — the folder is shared with sibling
  *   books (confirmed in a real library: a "Radio and Podcast Production"

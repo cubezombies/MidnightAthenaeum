@@ -69,7 +69,7 @@ delete). Either way, that book's progress, bookmarks, normalization,
 online-metadata override, ebook pairing, and transcript are cleared out too, so
 nothing orphaned is left behind; deleting also removes the book's folder itself
 if that leaves it completely empty (and only then — a folder shared with other
-books is never touched).
+books, including one with other books in its subfolders, is never touched).
 
 ## Installer
 
@@ -515,14 +515,18 @@ full plan and explicitly confirm — the preview shows exactly what would go
 where, plus how many books are already correctly filed or skipped (books
 outside any configured library folder).
 
-A folder that's shared by more than one unrelated book — a real case in
-this library: several different audio dramas filed side by side in one
-folder — only has that specific book's own files moved out; the shared
-folder itself is never renamed out from under its other occupants.
+A folder that's shared by more than one unrelated book — several audio
+dramas filed side by side, or an author folder with loose audio plus other
+books in subfolders — only has that specific book's own files moved out
+(keeping their subfolders); the shared folder itself is never renamed out
+from under its other occupants. No move ever overwrites an existing file,
+and a book that can't be moved completely (a file in use, say) is put back
+where it was rather than left split across two folders.
 
 Every individual move is journaled as it happens, so **File → Undo last
 reorganization…** can put everything back exactly where it was, including
-after an interruption or a cancelled run. Listening progress, bookmarks,
+after an interruption or a cancelled run. If some files can't be moved back
+(still in use), Undo says so and can simply be run again. Listening progress, bookmarks,
 loudness normalization, metadata overrides, and transcripts all move with
 their book, even though moving a book changes its internal id.
 

@@ -7,6 +7,34 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+
+## [0.23.3] - 2026-10-02
+### Fixed
+- **Delete book (files too) could send other books to the Recycle Bin.** When
+  a book's audio sat loose in a folder that also held other books in
+  subfolders (common for an author folder), deleting that book with its
+  files — or removing it as a duplicate — moved the *whole* folder, other
+  books included, to the Recycle Bin. Only the book's own files are touched
+  now. Checked against a real 9,400-book library: 36 books were affected,
+  one of them with 51 other books in its folder.
+- **Reorganize library by author was unsafe in the same folders** — it could
+  move a folder along with the other books inside it. It now moves just that
+  book's files. Reorganize also never overwrites an existing file, keeps
+  each track's subfolder (so a book split into parts with same-named files
+  can't have one part overwrite another), and if a book can't be fully
+  moved it's put back exactly where it was instead of being left half-moved.
+- **Undo last reorganization** no longer loses a book's progress and
+  bookmarks when some of its files can't be moved back, and can now be
+  retried to finish the job instead of forgetting what was left.
+- A deliberately malformed `.m4b` could make the app use over a gigabyte of
+  memory and stall while reading its chapters; that read is now bounded.
+- Starting a scan while another was just starting (e.g. clicking Rescan
+  right at launch) could run two scans at once; only one runs now.
+- Damaged `.m4b` parts of a multi-file book now keep their real length.
+- Chapter artwork is no longer lost after moving the library's data folder.
+- Read along no longer shows text from a previously paired ebook after you
+  pick a different one, and retries a chapter that failed to load.
+
 ### Security
 - Patched a denial-of-service advisory in `undici` (GHSA-3wwx-pv8p-q78v),
   a networking library used by the Discord Rich Presence integration and the

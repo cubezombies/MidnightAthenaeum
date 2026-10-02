@@ -67,13 +67,16 @@ async function readTags(filePath, wantCover) {
     // even though the tags themselves, in `moov` near the front, are intact.
     // Measured on a real ~6,800-file library: 12 files that 11.15 read fine,
     // 9 of them losing a real title/author. Read the iTunes tags ourselves
-    // before giving up. Duration isn't needed here: single-file books already
-    // fall back to readMp4Duration, and chapters/cover come from phase 2.
+    // before giving up. The duration comes from our own mvhd reader too:
+    // multi-file books (numbered .m4b parts) take each part's length from
+    // here, and a 0 would silently shift every later chapter -- so if even
+    // that fails, the file is still flagged as a read problem.
     if (/\.(m4b|m4a|mp4)$/i.test(filePath)) {
       const common = await readMp4Tags(filePath, { wantCover });
       if (common) {
         console.warn(`[parse-core] used the built-in MP4 tag reader for ${path.basename(filePath)}`);
-        return { common, format: {} };
+        const duration = await readMp4Duration(filePath);
+        return duration > 0 ? { common, format: { duration } } : { common, format: {}, failed: true };
       }
     }
     return { common: {}, format: {}, failed: true };
