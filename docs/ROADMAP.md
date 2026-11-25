@@ -1549,8 +1549,27 @@ rebuild regardless. Fix: repair or reinstall the Visual Studio Installer
 (with the "Desktop development with C++" workload), then confirm with a clean
 `npm ci` + `npm run pack`. CI is unaffected.
 
-### 7. Pending dependency: `@xhayper/discord-rpc` 1.3.4 → 1.5.1 — **S**
-Came in with the mistakenly merged #13, reverted untested; Dependabot should
+**Update 2026-11-25:** the symptom has changed. Build Tools at
+`F:\dev\VSBuildTools` are now found, but the build fails with MSB8040
+("Spectre-mitigated libraries are required"). `buildDependenciesFromSource:
+true` also makes electron-builder rebuild sqlite3 even when a matching
+`.forge-meta` is present, so the prebuilt-binary trick no longer works: a
+local `npm run pack` fails on `main` too, and a failed rebuild deletes the
+prebuilt `vscode-sqlite3.node`. Fix: add the "MSVC … Spectre-mitigated libs
+(x64/x86)" component in the Visual Studio Installer. Interim workaround in a
+scratch checkout: `npm ci --ignore-scripts`, run the electron and ffmpeg-static
+`install.js` by hand, copy in a working `@vscode/sqlite3/build`, then
+`npx electron-builder --dir -c.npmRebuild=false` (valid only while Electron's
+ABI is unchanged).
+
+### 7. Pending dependency: `@xhayper/discord-rpc` 1.3.4 → 1.5.1 — **shipped** ✅ (v0.23.4, #23)
+Verified 2026-11-25 under Electron 43.8.12, both in dev and inside the packaged
+build: the module loads, `new RPC.Client({ clientId })` / `on` / `login` /
+`destroy` / `isConnected` are unchanged, and a failed login rejects in under
+2 s, well inside the 4 s timeout. Still untested: presence with a real
+Application ID, since none is configured yet.
+
+Original note: came in with the mistakenly merged #13, reverted untested; Dependabot should
 re-propose it (it runs weekly). Its notes remove the WebSocket transport —
 the app only calls `new RPC.Client({ clientId })` with the default (IPC)
 transport, so that should be moot — plus a new health-check feature and

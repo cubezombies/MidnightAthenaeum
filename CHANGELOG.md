@@ -8,6 +8,23 @@ what the in-app "Check for Updates" screen shows) — see
 
 ## [Unreleased]
 
+## [0.23.4] - 2026-11-25
+### Security
+- Updated the Electron runtime to 43.8.12. This brings upstream Chromium
+  security fixes, including a mitigation for compromised eMudhra intermediate
+  certificates (GHSA-jr5w-w6x2-84p9) and a fix for pointer-lock permission
+  requests being attributed to the wrong frame (GHSA-x562-297c-g43g).
+- Patched `undici`, a networking library used by the Discord Rich Presence
+  integration and by the build tooling, against several denial-of-service,
+  TLS-validation and cache-poisoning advisories.
+- Patched `fast-uri` (used only by the build tooling) against several URI
+  parsing advisories. It is not part of the installed app.
+
+### Changed
+- Updated the Discord Rich Presence library (`@xhayper/discord-rpc` 1.5.1),
+  the in-app updater (`electron-updater` 6.8.11) and the installer builder
+  (`electron-builder` 26.18.0).
+
 ## [0.23.3] - 2026-10-02
 ### Fixed
 - **Delete book (files too) could send other books to the Recycle Bin.** When
