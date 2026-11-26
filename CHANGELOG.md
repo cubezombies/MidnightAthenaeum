@@ -7,6 +7,24 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+### Fixed
+- The library's filter bar no longer breaks in smaller windows. Below about
+  1250px the filter labels wrapped onto two or three lines and "Group series"
+  was pushed off the edge of the window; the sort and genre controls now move
+  to their own row instead.
+- The moon icon (theme toggle in light mode, and the Sleep button) showed as
+  a plain filled dot.
+
+### Accessibility
+- Dropdowns (genre, sort, skip amount, speed) now show a focus ring when
+  reached with the keyboard; before, there was no visible focus at all.
+- White text on purple buttons and the selected filter now meets WCAG AA
+  contrast in the dark theme (was 3.95:1, now 4.9:1).
+- Larger click targets for a bookmark's clip and delete buttons and for the
+  volume slider. The bookmark buttons also appear when reached with the
+  keyboard, not only on mouse hover, and have proper screen-reader labels.
+- Respects Windows' "Animation effects" setting (reduced motion), including
+  read-along's auto-scroll.
 
 ## [0.23.4] - 2026-11-25
 ### Security
