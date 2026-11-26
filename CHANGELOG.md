@@ -7,6 +7,8 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+
+## [0.23.5] - 2026-11-25
 ### Fixed
 - The library's filter bar no longer breaks in smaller windows. Below about
   1250px the filter labels wrapped onto two or three lines and "Group series"
