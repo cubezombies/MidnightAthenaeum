@@ -1747,8 +1747,8 @@ function buildBookmarkRow(book, bm) {
   note.rows = 1;
   note.value = bm.note || '';
   note.placeholder = 'Add a note…';
-  note.classList.toggle('empty', !bm.note);
-  note.addEventListener('input', () => { autoGrow(note); note.classList.toggle('empty', !note.value); });
+  note.classList.toggle('note-empty', !bm.note);
+  note.addEventListener('input', () => { autoGrow(note); note.classList.toggle('note-empty', !note.value); });
   commitOnEdit(note, () => saveBookmark(book.id, bm.id, { note: note.value }), { allowNewline: true });
 
   body.append(label, note);
@@ -1759,11 +1759,13 @@ function buildBookmarkRow(book, bm) {
   clipBtn.className = 'bookmark-clip';
   clipBtn.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-share"></use></svg>';
   clipBtn.title = 'Create a clip from this bookmark';
+  clipBtn.setAttribute('aria-label', clipBtn.title);
   clipBtn.addEventListener('click', () => openClipModal(book, bm));
   const del = document.createElement('button');
   del.className = 'bookmark-del';
   del.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>';
   del.title = 'Delete bookmark';
+  del.setAttribute('aria-label', del.title);
   del.addEventListener('click', async () => {
     state.bookmarks = await window.api.removeBookmark({ bookId: book.id, id: bm.id });
     refreshBookmarksView();
@@ -4103,7 +4105,9 @@ function updateReadAlongProgress(audioChapterIdx, position) {
     paragraphs[state.readAlong.highlightedParagraphIndex]?.classList.remove('read-along-current');
   }
   paragraphs[target].classList.add('read-along-current');
-  paragraphs[target].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  // Explicit behavior:'smooth' isn't covered by the CSS reduced-motion rule.
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  paragraphs[target].scrollIntoView({ block: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
   state.readAlong.highlightedParagraphIndex = target;
 }
 el.transcriptModal.addEventListener('keydown', (e) => {

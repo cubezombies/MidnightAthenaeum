@@ -8,6 +8,12 @@
   --accent: #7c6cf5;
   --accent-soft: rgba(124, 108, 245, 0.16);
   --accent-hover: #6b59f0;
+  /* Background for filled controls that carry white text. --accent itself
+     is tuned for accent-coloured text and borders on the dark background
+     (4.6:1); white on it is only 3.95:1, below WCAG AA. This shade gives
+     white text 4.9:1. */
+  --accent-fill: #6b5ce7;
+  --accent-fill-hover: #5f4fd8;
   --btn-hover: #2b2b3a;
   --scrollbar: #4c4c60;
   --scrollbar-hover: #5f5f78;
@@ -32,6 +38,8 @@
   --accent: #6a4de2;
   --accent-soft: rgba(106, 77, 226, 0.13);
   --accent-hover: #5a3fd0;
+  --accent-fill: #6a4de2;
+  --accent-fill-hover: #5a3fd0;
   --btn-hover: #e2e2ec;
   --scrollbar: #c2c2d0;
   --scrollbar-hover: #a6a6b8;
@@ -50,6 +58,8 @@
     --accent: #6a4de2;
     --accent-soft: rgba(106, 77, 226, 0.13);
     --accent-hover: #5a3fd0;
+    --accent-fill: #6a4de2;
+    --accent-fill-hover: #5a3fd0;
     --btn-hover: #e2e2ec;
     --scrollbar: #c2c2d0;
     --scrollbar-hover: #a6a6b8;
@@ -204,8 +214,8 @@ input[type="search"]:focus { border-color: var(--accent); }
   font-size: 13px;
 }
 .btn:hover { background: var(--btn-hover); }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
+.btn-primary:hover { background: var(--accent-fill-hover); }
 .btn-quiet { background: transparent; }
 
 .icon-btn {
@@ -268,19 +278,25 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 .continue-row .card { width: 150px; flex-shrink: 0; }
 
 /* ---------- Filter tabs ---------- */
+/* Wraps instead of squeezing: below ~1250px the tabs and the right-hand
+   controls don't fit on one line, and without wrapping the tab labels broke
+   onto 2-3 lines while "Group series" was pushed off-screen. Now the
+   right-hand group drops to its own row and every label stays on one line. */
 .library-toolbar {
   display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; row-gap: 10px;
   margin-bottom: 18px; gap: 12px;
 }
-.filter-tabs { display: flex; gap: 4px; background: var(--bg-elev); padding: 4px; border-radius: 10px; }
+.filter-tabs { display: flex; flex-wrap: wrap; gap: 4px; background: var(--bg-elev); padding: 4px; border-radius: 10px; }
 .filter-tab {
   background: transparent; border: none; color: var(--muted);
   padding: 6px 14px; border-radius: 7px; cursor: pointer; font-size: 13px;
+  white-space: nowrap;
 }
 .filter-tab:hover { color: var(--text); }
-.filter-tab.active { background: var(--accent); color: #fff; }
+.filter-tab.active { background: var(--accent-fill); color: #fff; }
 .filter-count { white-space: nowrap; }
-.toolbar-right { display: flex; align-items: center; gap: 14px; }
+.toolbar-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; row-gap: 8px; margin-left: auto; }
 .sort-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .sort-label select { padding: 5px 7px; font-size: 13px; }
 
@@ -290,7 +306,7 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 .genre-label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .genre-label select { padding: 5px 7px; font-size: 13px; max-width: 160px; }
 .group-toggle { padding: 6px 12px; font-size: 13px; }
-.group-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.group-toggle[aria-pressed="true"] { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
 
 /* ---------- Series tile ---------- */
 .series-card { cursor: pointer; }
@@ -337,7 +353,7 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
    instead, since a tile's top-right is already the volume-count badge. */
 .new-badge {
   position: absolute; top: 7px; right: 7px; z-index: 2;
-  background: var(--accent); color: #fff;
+  background: var(--accent-fill); color: #fff;
   border-radius: 20px; padding: 2px 8px; font-size: 10px; font-weight: 700;
   letter-spacing: .04em;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
@@ -501,7 +517,8 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
   border: 1px solid transparent;
 }
 .bookmark:hover { background: var(--bg-elev); }
-.bookmark:hover .bookmark-actions { opacity: 1; }
+.bookmark:hover .bookmark-actions,
+.bookmark:focus-within .bookmark-actions { opacity: 1; }
 .bookmark.auto { opacity: 0.85; }
 
 .bookmark-jump {
@@ -528,12 +545,15 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 }
 .bookmark-note:hover { border-color: var(--line); }
 .bookmark-note:focus { border-color: var(--accent); background: var(--bg-elev-2); color: var(--text); }
-.bookmark-note.empty:not(:focus) { color: var(--faint); font-style: italic; }
+.bookmark-note.note-empty:not(:focus) { color: var(--faint); font-style: italic; }
 
 .bookmark-actions { display: flex; gap: 4px; opacity: 0; transition: opacity .12s; flex-shrink: 0; }
 .bookmark-clip, .bookmark-del {
   background: transparent; border: none; color: var(--muted); cursor: pointer;
   padding: 3px 7px; border-radius: 6px; font-size: 14px;
+  /* At least 28x28, comfortably above WCAG 2.2's 24px target minimum (was 27x22). */
+  min-width: 28px; min-height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .bookmark-clip:hover { background: var(--accent-soft); color: var(--accent); }
 .bookmark-del:hover { background: var(--danger-bg); color: var(--danger-text); }
@@ -633,11 +653,11 @@ input[type="range"]::-webkit-slider-thumb {
 .controls { display: flex; align-items: center; gap: 8px; justify-self: center; }
 .play-btn {
   width: 46px; height: 46px; border-radius: 50%;
-  background: var(--accent); color: #fff; border: none;
+  background: var(--accent-fill); color: #fff; border: none;
   font-size: 17px; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
 }
-.play-btn:hover { background: var(--accent-hover); }
+.play-btn:hover { background: var(--accent-fill-hover); }
 
 /* No min-width: 0 here on purpose — unlike .now-playing (whose text
    genuinely shrinks via ellipsis), .extras' children are buttons/selects/a
@@ -651,7 +671,9 @@ input[type="range"]::-webkit-slider-thumb {
 .extras { display: flex; align-items: center; gap: 18px; justify-self: end; }
 .extra { display: flex; align-items: center; gap: 7px; }
 .extra-label { color: var(--muted); font-size: 12px; }
-#volume { width: 84px; }
+/* A taller box than the 4px painted track, so the hit area is 24px high
+   (was 4px); Chromium centres the track within the box. */
+#volume { width: 84px; height: 24px; }
 
 @media (max-width: 1300px) {
   .extras { gap: 10px; }
@@ -705,6 +727,12 @@ select {
   background: var(--bg-elev-2); color: var(--text);
   border: 1px solid var(--line); border-radius: 7px;
   padding: 5px 7px; cursor: pointer; outline: none;
+}
+/* outline:none above removed the only keyboard focus cue on every dropdown
+   (genre, sort, skip amount, speed, ...); this restores one for keyboard
+   focus only, so mouse clicks don't flash a ring. */
+select:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
 }
 
 ::-webkit-scrollbar { width: 11px; }
@@ -1088,3 +1116,16 @@ body.playing .read-along-panel { bottom: var(--player-h); }
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 .updates-notes-body a { color: var(--accent); }
+
+/* ---------- Reduced motion ---------- */
+/* Honour the OS "reduce animations" setting: transitions and animations
+   finish immediately instead of being removed, so anything that waits on
+   transitionend/animationend still fires. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
