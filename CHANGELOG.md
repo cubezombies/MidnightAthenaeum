@@ -7,6 +7,22 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+### Changed
+- **Book view redesign.** A large **Play / Resume from 12:34 / Pause** button
+  leads the book header, with a progress line underneath (position, current
+  chapter, time left). Bookmark, Mark as finished and Read along sit beside
+  it; everything else moved into a **⋯** menu (look up online, transcription,
+  reset progress), with Remove and Delete set apart in red at the bottom.
+  Long descriptions are cut to three lines with a **More** toggle instead of
+  scrolling inside a small box.
+- **Simpler top bar.** **Stats** is now a labelled button. A **Library** menu
+  replaces the Folders button and also holds Rescan, Find duplicates and
+  Reorganize by author. A **Settings** (gear) menu holds the skip amount
+  (moved out of the player bar), the Discord toggle and Check for updates; a
+  dot on the gear shows when an update is waiting.
+
+### Added
+- **Show in File Explorer** for a book, in the book view's ⋯ menu.
 
 ## [0.23.5] - 2026-11-25
 ### Fixed

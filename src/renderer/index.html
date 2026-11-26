@@ -30,6 +30,10 @@
     <symbol id="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
     </symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </symbol>
     <symbol id="icon-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 3v12"/><polyline points="7 11 12 16 17 11"/><path d="M5 19h14"/>
     </symbol>
@@ -119,22 +123,45 @@
       <button id="themeBtn" class="icon-btn theme-btn" title="Toggle light / dark theme" aria-label="Toggle theme">
         <svg class="icon" aria-hidden="true"><use id="themeIcon" href="#icon-sun"></use></svg>
       </button>
-      <button id="updatesBtn" class="icon-btn updates-btn" title="Check for updates" aria-label="Check for updates">
-        <svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg><span id="updatesDot" class="updates-dot hidden"></span>
+      <button id="statsBtn" class="btn btn-nav" title="Listening stats">
+        <svg class="icon" aria-hidden="true"><use href="#icon-bar-chart"></use></svg>Stats
       </button>
-      <button id="discordBtn" class="icon-btn" title="Show what you're listening to on Discord" aria-label="Discord Rich Presence" aria-pressed="false">
-        <svg class="icon" aria-hidden="true"><use href="#icon-broadcast"></use></svg>
-      </button>
-      <button id="statsBtn" class="icon-btn" title="Listening stats" aria-label="Listening stats">
-        <svg class="icon" aria-hidden="true"><use href="#icon-bar-chart"></use></svg>
-      </button>
-      <button id="rescanBtn" class="btn">Rescan</button>
       <div class="extra folders">
-        <button id="foldersBtn" class="btn btn-primary" aria-haspopup="true" aria-expanded="false" title="Manage library folders">Folders</button>
+        <button id="foldersBtn" class="btn btn-nav" aria-haspopup="true" aria-expanded="false" title="Library folders, rescan and tools">
+          <svg class="icon" aria-hidden="true"><use href="#icon-folder"></use></svg>Library<span class="nav-caret" aria-hidden="true">▾</span>
+        </button>
         <div id="foldersMenu" class="folders-menu hidden" role="menu">
           <div class="folders-menu-title">Library folders</div>
           <ul id="foldersList" class="folders-list"></ul>
           <button id="addFolderBtn" class="btn btn-primary folders-add">Add folder</button>
+          <div class="menu-sep"></div>
+          <button id="rescanBtn" class="menu-item" role="menuitem">Rescan</button>
+          <button id="findDuplicatesBtn" class="menu-item" role="menuitem">Find duplicates…</button>
+          <button id="reorganizeBtn" class="menu-item" role="menuitem">Reorganize by author…</button>
+        </div>
+      </div>
+      <div class="extra settings">
+        <button id="settingsBtn" class="icon-btn" aria-haspopup="true" aria-expanded="false" title="Settings" aria-label="Settings">
+          <svg class="icon" aria-hidden="true"><use href="#icon-settings"></use></svg><span id="settingsDot" class="updates-dot hidden"></span>
+        </button>
+        <div id="settingsMenu" class="menu settings-menu hidden" role="menu">
+          <label class="menu-field">
+            <span>Skip amount</span>
+            <select id="skipAmount" aria-label="Skip amount for the back/forward buttons and arrow keys">
+              <option value="10">10s</option>
+              <option value="15">15s</option>
+              <option value="30" selected>30s</option>
+              <option value="45">45s</option>
+              <option value="60">60s</option>
+            </select>
+          </label>
+          <button id="discordBtn" class="menu-item" role="menuitemcheckbox" aria-pressed="false" title="Show what you're listening to on Discord">
+            <svg class="icon" aria-hidden="true"><use href="#icon-broadcast"></use></svg>Show on Discord<span class="menu-toggle" aria-hidden="true"></span>
+          </button>
+          <div class="menu-sep"></div>
+          <button id="updatesBtn" class="menu-item" role="menuitem">
+            <svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>Check for updates…<span id="updatesDot" class="updates-dot menu-dot hidden"></span>
+          </button>
         </div>
       </div>
     </div>
@@ -211,24 +238,40 @@
           <p id="bookProblem" class="book-problem hidden" role="note"></p>
           <p id="metadataBadge" class="muted small metadata-badge hidden">via Open Library</p>
           <p id="bookDesc" class="desc"></p>
+          <button id="descMoreBtn" class="desc-more hidden" aria-expanded="false">More</button>
+          <div id="bookProgress" class="book-progress hidden">
+            <div class="book-progress-row"><span id="bookProgressPos"></span><span id="bookProgressLeft"></span></div>
+            <div class="book-progress-bar"><span id="bookProgressFill"></span></div>
+          </div>
           <div class="book-actions">
-            <button id="bookmarkHereBtn" class="btn">Bookmark current spot</button>
+            <button id="resumeBtn" class="btn-resume">
+              <svg class="icon" aria-hidden="true"><use id="resumeIcon" href="#icon-play"></use></svg><span id="resumeLabel">Play</span><small id="resumeSub"></small>
+            </button>
+            <button id="bookmarkHereBtn" class="btn" title="Bookmark current spot">
+              <svg class="icon" aria-hidden="true"><use href="#icon-bookmark"></use></svg>Bookmark
+            </button>
             <button id="finishedToggleBtn" class="btn finished-toggle" aria-pressed="false">Mark as finished</button>
-            <button id="resetProgressBtn" class="btn btn-quiet">Reset progress</button>
-            <button id="metadataLookupBtn" class="btn btn-quiet">Look up online</button>
-            <button id="metadataRevertBtn" class="btn btn-quiet hidden">Revert to file tags</button>
-            <button id="transcribeBtn" class="btn btn-quiet">Transcribe this book</button>
-            <button id="cancelTranscribeBtn" class="btn btn-quiet hidden">Cancel transcribing</button>
-            <button id="searchTranscriptBtn" class="btn btn-quiet hidden">Search transcript</button>
+            <button id="readAlongBtn" class="btn">Read along</button>
             <button id="captionsBtn" class="icon-btn hidden" title="Show live captions" aria-label="Show live captions" aria-pressed="false">
               <svg class="icon" aria-hidden="true"><use href="#icon-captions"></use></svg>
             </button>
-            <button id="deleteTranscriptBtn" class="icon-btn hidden" title="Delete transcript" aria-label="Delete transcript">
-              <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
-            </button>
-            <button id="readAlongBtn" class="btn btn-quiet">Read along</button>
-            <button id="removeBookBtn" class="btn btn-quiet book-delete-btn">Remove from library</button>
-            <button id="deleteBookBtn" class="btn btn-quiet book-delete-btn">Delete book (files too)…</button>
+            <div class="book-more">
+              <button id="bookMoreBtn" class="btn book-more-btn" aria-haspopup="true" aria-expanded="false" title="More actions" aria-label="More actions">⋯</button>
+              <div id="bookMoreMenu" class="menu hidden" role="menu">
+                <button id="metadataLookupBtn" class="menu-item" role="menuitem">Look up details online…</button>
+                <button id="metadataRevertBtn" class="menu-item hidden" role="menuitem">Revert to file tags</button>
+                <button id="transcribeBtn" class="menu-item" role="menuitem">Transcribe this book</button>
+                <button id="cancelTranscribeBtn" class="menu-item hidden" role="menuitem">Cancel transcribing</button>
+                <button id="searchTranscriptBtn" class="menu-item hidden" role="menuitem">Search transcript</button>
+                <button id="deleteTranscriptBtn" class="menu-item hidden" role="menuitem">Delete transcript</button>
+                <button id="revealBookBtn" class="menu-item" role="menuitem">Show in File Explorer</button>
+                <div class="menu-sep"></div>
+                <button id="resetProgressBtn" class="menu-item" role="menuitem">Reset progress</button>
+                <div class="menu-sep"></div>
+                <button id="removeBookBtn" class="menu-item menu-danger" role="menuitem">Remove from library</button>
+                <button id="deleteBookBtn" class="menu-item menu-danger" role="menuitem">Delete book (files too)…</button>
+              </div>
+            </div>
           </div>
           <div id="transcribeStatus" class="muted small transcribe-status hidden"></div>
         </div>
@@ -343,16 +386,6 @@
             <button class="sleep-opt sleep-off" role="menuitem" data-sleep="off">Off</button>
           </div>
         </div>
-        <label class="extra">
-          <span class="extra-label">Skip</span>
-          <select id="skipAmount" aria-label="Skip amount for the back/forward buttons and arrow keys">
-            <option value="10">10s</option>
-            <option value="15">15s</option>
-            <option value="30" selected>30s</option>
-            <option value="45">45s</option>
-            <option value="60">60s</option>
-          </select>
-        </label>
         <label class="extra">
           <span class="extra-label">Speed</span>
           <select id="speed" aria-label="Playback speed">

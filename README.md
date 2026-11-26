@@ -50,7 +50,7 @@ npm start
 > terminal does this), `electron` runs as plain Node and no window appears.
 > Clear it first: `$env:ELECTRON_RUN_AS_NODE=$null`.
 
-On first launch, click **Folders** in the top bar to add your audiobook
+On first launch, open the **Library** menu in the top bar to add your audiobook
 directory. The same panel lists every folder currently in your library — each
 with a live book count — and lets you remove one, which drops its books from
 Midnight Athenaeum without touching anything on disk. Removing a folder that holds
@@ -61,8 +61,8 @@ overlay while you're dragging and adds the folder the same way "Folders → Add
 folder" would. Dropping something that isn't a folder (e.g. an individual file)
 is rejected with a toast rather than silently doing nothing.
 
-For a single book rather than a whole folder, the book detail view and
-right-click on any library card offer two narrower actions: **Remove from
+For a single book rather than a whole folder, the book detail view's **⋯** menu
+and right-click on any library card offer two narrower actions: **Remove from
 library** (drops it from Midnight Athenaeum, files untouched) and **Delete book
 (files too)** (also sends its files to the Recycle Bin — never a permanent
 delete). Either way, that book's progress, bookmarks, normalization,
@@ -171,7 +171,8 @@ If you'd still rather not run an unsigned `.exe`, `npm start` from source (see
 
 ### Checking for updates
 
-**Help → Check for Updates…** (or the ⬇ button in the top bar) checks GitHub
+**Help → Check for Updates…** (or **Settings ⚙ → Check for updates…** in the
+top bar; a dot on the gear means an update is waiting) checks GitHub
 Releases for a newer version. It's entirely manual — nothing is checked
 automatically on launch or in the background. If a newer version exists it
 shows what changed (pulled from that release's [CHANGELOG.md](CHANGELOG.md)
@@ -312,7 +313,8 @@ jumps the queue for whatever book you open first. Results are cached against
 each file's size and mtime, so rescans only reparse what changed.
 
 Routine launch scans take a fast path that only checks each book's folder,
-which can miss a file re-tagged in place under the same name. **Rescan**
+which can miss a file re-tagged in place under the same name. **Rescan** (in
+the top bar's **Library** menu)
 always does the full per-file check, and a launch scan does it on its own
 once a week, so a library edited outside the app catches up either way.
 While any scan is running, the Rescan button becomes **Cancel scan** —
@@ -445,7 +447,7 @@ above are unaffected by this feature.
 
 ## Transcription & transcript search
 
-**Transcribe this book** (book view) runs a book through
+**Transcribe this book** (in the book view's **⋯** menu) runs a book through
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp) entirely offline —
 no audio or text ever leaves your machine. Each track is converted to 16kHz
 mono PCM with a bundled `ffmpeg`, then transcribed; GPU acceleration (Vulkan)
@@ -483,7 +485,7 @@ its card.
 
 ## Listening stats
 
-The bar-chart icon in the top bar opens a **Stats** view: total time listened,
+The **Stats** button in the top bar opens a view of total time listened,
 books finished, your current day streak, top 5 authors and narrators, and a
 12-week listening pace chart. Streak and pace tracking started with this
 feature, so there's no historical data to back-fill from before you first saw
@@ -563,7 +565,7 @@ take considerably more work for considerably less reliable results.
 | Key | Action |
 | --- | --- |
 | `Space` | Play / pause |
-| `←` / `→` | Back / forward (skip amount, default 30s — set via the **Skip** dropdown) |
+| `←` / `→` | Back / forward (skip amount, default 30s — set under **Settings ⚙ → Skip amount**) |
 | `Shift` + `←` / `→` | Back / forward 5 min |
 | `B` | Add a bookmark at the current spot |
 | `S` | Toggle skip-silence |
