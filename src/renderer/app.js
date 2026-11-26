@@ -1747,8 +1747,8 @@ function buildBookmarkRow(book, bm) {
   note.rows = 1;
   note.value = bm.note || '';
   note.placeholder = 'Add a note…';
-  note.classList.toggle('empty', !bm.note);
-  note.addEventListener('input', () => { autoGrow(note); note.classList.toggle('empty', !note.value); });
+  note.classList.toggle('note-empty', !bm.note);
+  note.addEventListener('input', () => { autoGrow(note); note.classList.toggle('note-empty', !note.value); });
   commitOnEdit(note, () => saveBookmark(book.id, bm.id, { note: note.value }), { allowNewline: true });
 
   body.append(label, note);

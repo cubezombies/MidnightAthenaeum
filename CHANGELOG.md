@@ -12,6 +12,10 @@ what the in-app "Check for Updates" screen shows) — see
   1250px the filter labels wrapped onto two or three lines and "Group series"
   was pushed off the edge of the window; the sort and genre controls now move
   to their own row instead.
+- A bookmark without a note took up about 160px of empty space and showed
+  its "Add a note…" placeholder off-centre, pushing the chapter list down
+  (out of view in a 1024×680 window). The note box was picking up the
+  library's empty-state styling through a shared class name.
 - The moon icon (theme toggle in light mode, and the Sleep button) showed as
   a plain filled dot.
 

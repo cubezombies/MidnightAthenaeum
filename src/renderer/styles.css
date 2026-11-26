@@ -545,7 +545,7 @@ code { background: var(--bg-elev-2); padding: 1px 5px; border-radius: 4px; font-
 }
 .bookmark-note:hover { border-color: var(--line); }
 .bookmark-note:focus { border-color: var(--accent); background: var(--bg-elev-2); color: var(--text); }
-.bookmark-note.empty:not(:focus) { color: var(--faint); font-style: italic; }
+.bookmark-note.note-empty:not(:focus) { color: var(--faint); font-style: italic; }
 
 .bookmark-actions { display: flex; gap: 4px; opacity: 0; transition: opacity .12s; flex-shrink: 0; }
 .bookmark-clip, .bookmark-del {
