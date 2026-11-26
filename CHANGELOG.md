@@ -7,6 +7,8 @@ what the in-app "Check for Updates" screen shows) — see
 `scripts/extract-changelog.cjs`.
 
 ## [Unreleased]
+
+## [0.24.0] - 2026-11-26
 ### Changed
 - **Book view redesign.** A large **Play / Resume from 12:34 / Pause** button
   leads the book header, with a progress line underneath (position, current
