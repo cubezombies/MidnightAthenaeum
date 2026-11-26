@@ -2335,6 +2335,17 @@ function registerIpc() {
    * bookId will never exist again, so leaving that data behind would just
    * be permanent orphaned cruft in every one of those JSON files.
    */
+  // "Show in File Explorer": the renderer passes only a book id, and the path
+  // comes from the library store, so a renderer can't point this at an
+  // arbitrary path.
+  ipcMain.handle('library:revealBook', (_event, bookId) => {
+    if (typeof bookId !== 'string') return false;
+    const file = libraryStore.getBook(bookId)?.tracks?.[0]?.filePath;
+    if (!file || !fs.existsSync(file)) return false;
+    shell.showItemInFolder(file);
+    return true;
+  });
+
   ipcMain.handle('library:deleteBook', async (_event, { bookId, deleteFiles } = {}) => {
     if (typeof bookId !== 'string') return { ok: false, error: 'Invalid book.' };
     const state = libraryStore.get();

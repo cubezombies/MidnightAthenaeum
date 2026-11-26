@@ -93,6 +93,14 @@ const el = {
   sleepBtn: $('sleepBtn'), sleepLabel: $('sleepLabel'), sleepMenu: $('sleepMenu'),
   sleepSnooze: document.querySelector('.sleep-extend'),
   skipSilenceBtn: $('skipSilenceBtn'), normalizeBtn: $('normalizeBtn'), voiceBoostBtn: $('voiceBoostBtn'),
+  // Book header: primary action, progress line, description toggle, overflow menu.
+  resumeBtn: $('resumeBtn'), resumeIcon: $('resumeIcon'), resumeLabel: $('resumeLabel'), resumeSub: $('resumeSub'),
+  bookProgress: $('bookProgress'), bookProgressPos: $('bookProgressPos'), bookProgressLeft: $('bookProgressLeft'),
+  bookProgressFill: $('bookProgressFill'), descMoreBtn: $('descMoreBtn'),
+  bookMoreBtn: $('bookMoreBtn'), bookMoreMenu: $('bookMoreMenu'), revealBookBtn: $('revealBookBtn'),
+  // Topbar menus.
+  settingsBtn: $('settingsBtn'), settingsMenu: $('settingsMenu'), settingsDot: $('settingsDot'),
+  findDuplicatesBtn: $('findDuplicatesBtn'), reorganizeBtn: $('reorganizeBtn'),
 };
 
 const SKIP_AMOUNTS = new Set([10, 15, 30, 45, 60]);
@@ -886,11 +894,80 @@ function openFoldersMenu(open) {
 
 el.foldersBtn.addEventListener('click', (e) => {
   e.stopPropagation();
+  closeDropdowns();
   openFoldersMenu(el.foldersMenu.classList.contains('hidden'));
 });
 document.addEventListener('click', (e) => {
   if (!el.folders?.contains(e.target)) openFoldersMenu(false);
 });
+
+// Library tools that used to live only in the app menu (and Rescan, which
+// used to be its own topbar button). Close the Library menu first so the
+// modal or scan status isn't covered by it.
+el.findDuplicatesBtn.addEventListener('click', () => { openFoldersMenu(false); openDuplicatesModal(); });
+el.reorganizeBtn.addEventListener('click', () => { openFoldersMenu(false); openReorganizeModal(); });
+el.rescanBtn.addEventListener('click', () => openFoldersMenu(false));
+
+/* ---------------- dropdown menus (Settings, book "More actions") ---------------- */
+
+/**
+ * A popup menu anchored to a button. The menu closes (capture phase, so
+ * before the item's own handler runs, which may open a confirm dialog or a
+ * modal) when an item is clicked, unless the item matches `keepOpenOn`.
+ * Outside clicks, Escape and opening another menu also close it, and the
+ * arrow keys move between visible items.
+ */
+const dropdowns = [];
+
+function setupDropdown(button, menu, { keepOpenOn } = {}) {
+  const dd = {
+    button,
+    menu,
+    isOpen: () => !menu.classList.contains('hidden'),
+    open(next) {
+      if (next) {
+        dropdowns.forEach((d) => { if (d !== dd) d.open(false); });
+        openFoldersMenu(false);
+      }
+      menu.classList.toggle('hidden', !next);
+      button.setAttribute('aria-expanded', String(next));
+      if (next) menuFocusables(menu)[0]?.focus();
+    },
+  };
+  button.addEventListener('click', () => dd.open(!dd.isOpen()));
+  menu.addEventListener('click', (e) => {
+    const item = e.target.closest('.menu-item');
+    if (!item || (keepOpenOn && item.matches(keepOpenOn))) return;
+    dd.open(false);
+    button.focus();
+  }, true);
+  menu.addEventListener('keydown', (e) => {
+    if ((e.key !== 'ArrowDown' && e.key !== 'ArrowUp') || e.target.matches('select')) return;
+    e.preventDefault();
+    const items = menuFocusables(menu);
+    const i = items.indexOf(document.activeElement);
+    items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+  });
+  dropdowns.push(dd);
+  return dd;
+}
+
+function menuFocusables(menu) {
+  return [...menu.querySelectorAll('.menu-item, select')]
+    .filter((x) => !x.disabled && x.offsetParent !== null);
+}
+
+function closeDropdowns() {
+  dropdowns.forEach((d) => d.open(false));
+}
+
+document.addEventListener('click', (e) => {
+  if (dropdowns.some((d) => d.menu.contains(e.target) || d.button.contains(e.target))) return;
+  closeDropdowns();
+});
+
+setupDropdown(el.settingsBtn, el.settingsMenu, { keepOpenOn: '#discordBtn' });
+setupDropdown(el.bookMoreBtn, el.bookMoreMenu);
 
 /** Books you're partway through, most-recently-played first. */
 function renderContinueShelf() {
@@ -1544,6 +1621,16 @@ function renderBookHeader(book) {
 
   el.bookDesc.textContent = book.description || '';
   el.bookDesc.classList.toggle('hidden', !book.description);
+  // Clamped to 3 lines by CSS; offer More only when it actually overflows.
+  el.bookDesc.classList.remove('expanded');
+  el.descMoreBtn.textContent = 'More';
+  el.descMoreBtn.setAttribute('aria-expanded', 'false');
+  el.descMoreBtn.classList.add('hidden');
+  if (book.description) {
+    requestAnimationFrame(() => {
+      el.descMoreBtn.classList.toggle('hidden', el.bookDesc.scrollHeight <= el.bookDesc.clientHeight + 1);
+    });
+  }
 }
 
 function openBook(bookId) {
@@ -1586,7 +1673,81 @@ function updateFinishedButton(book) {
   const finished = isFinished(state.progress[book.id]);
   el.finishedToggleBtn.textContent = finished ? 'Mark as not finished' : 'Mark as finished';
   el.finishedToggleBtn.setAttribute('aria-pressed', String(finished));
+  updateBookPrimary();
 }
+
+/**
+ * The book header's primary button (Play / Resume from 12:34 / Pause /
+ * Play again) and its progress line. Reads the live player position when
+ * this book is the one loaded, else its saved progress.
+ */
+function updateBookPrimary() {
+  const book = state.current;
+  if (!book || !el.resumeBtn) return;
+  const loaded = state.playing?.id === book.id;
+  const saved = state.progress[book.id];
+  const total = effectiveDuration(book) || book.duration || 0;
+  const playing = loaded && !el.audio.paused;
+  // A track with no metadata yet (still loading, or failed to load) reports
+  // 0; fall back to the saved position so the button still says where it'll
+  // resume from. Only then: a loaded track at 0 really is at the start.
+  let position = loaded ? globalTime() : (saved?.position ?? 0);
+  if (loaded && !playing && el.audio.readyState < 1 && position < 1 && (saved?.position ?? 0) >= 1) {
+    position = saved.position;
+  }
+  const atEnd = total > 0 && position >= total - 5;
+
+  let label = 'Play';
+  let sub = '';
+  if (playing) label = 'Pause';
+  else if (atEnd) label = 'Play again';
+  else if (position >= 1) { label = 'Resume'; sub = `from ${formatTime(position)}`; }
+  el.resumeLabel.textContent = label;
+  el.resumeSub.textContent = sub;
+  el.resumeIcon.setAttribute('href', playing ? '#icon-pause' : '#icon-play');
+  el.resumeBtn.setAttribute('aria-label', sub ? `${label} ${sub}` : label);
+
+  const started = position >= 1 && total > 0;
+  el.bookProgress.classList.toggle('hidden', !started);
+  if (!started) return;
+  const idx = book.chapters.length ? chapterAt(book, position) : -1;
+  const chapter = idx >= 0 ? ` · Chapter ${idx + 1} of ${book.chapters.length}` : '';
+  el.bookProgressPos.textContent = `${formatTime(position)} of ${formatTime(total)}${chapter}`;
+  const left = total - position;
+  el.bookProgressLeft.textContent = isFinished(saved) && atEnd ? 'Finished'
+    : left < 60 ? 'Less than a minute left' : `${formatDurationLong(left)} left`;
+  el.bookProgressFill.style.width = `${Math.min(100, (position / total) * 100).toFixed(2)}%`;
+}
+
+el.resumeBtn.addEventListener('click', () => {
+  const book = state.current;
+  if (!book) return;
+  if (state.playing?.id !== book.id) { loadIntoPlayer(book); return; }
+  const total = effectiveDuration(book) || book.duration || 0;
+  if (el.audio.paused && total > 0 && globalTime() >= total - 5) {
+    // seekTo only honours autoplay when it has to load a different track
+    // (a multi-file book's first file); within the current track, start
+    // playback here.
+    seekTo(0, { autoplay: true });
+    if (el.audio.readyState >= 1 && el.audio.paused) {
+      el.audio.play().catch((err) => console.error('playback failed:', err));
+    }
+    return;
+  }
+  togglePlayPause();
+});
+
+el.descMoreBtn.addEventListener('click', () => {
+  const expanded = el.bookDesc.classList.toggle('expanded');
+  el.descMoreBtn.textContent = expanded ? 'Less' : 'More';
+  el.descMoreBtn.setAttribute('aria-expanded', String(expanded));
+});
+
+el.revealBookBtn.addEventListener('click', async () => {
+  if (!state.current) return;
+  const ok = await window.api.revealBook(state.current.id);
+  if (!ok) showToast("Couldn't find this book's files on disk.");
+});
 
 /** Show/hide the "via Open Library" provenance badge and the revert action. */
 function updateMetadataUI(book) {
@@ -2854,6 +3015,7 @@ function updateTimeUI() {
     el.seek.value = String(Math.round((position / total) * 1000));
   }
   if (!state.seeking) renderSeekWaveform();
+  if (book && state.current?.id === book.id) updateBookPrimary();
 
   if (book?.chapters.length) {
     const idx = chapterAt(book, position);
@@ -3151,6 +3313,7 @@ function attachPlaybackListeners(element) {
     if (e.currentTarget !== el.audio) return;
     el.playIcon.setAttribute('href', '#icon-pause');
     el.playBtn.setAttribute('aria-label', 'Pause');
+    updateBookPrimary();
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing';
     window.api.setPlayingState(true);
     pushDiscordActivity();
@@ -3182,6 +3345,7 @@ function attachPlaybackListeners(element) {
     if (e.currentTarget !== el.audio) return;
     el.playIcon.setAttribute('href', '#icon-play');
     el.playBtn.setAttribute('aria-label', 'Play');
+    updateBookPrimary();
     if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused';
     window.api.setPlayingState(false);
     pushDiscordActivity();
@@ -4592,6 +4756,9 @@ function updateIsPending(status) {
 
 function renderUpdateStatus(status) {
   el.updatesDot.classList.toggle('hidden', !updateIsPending(status));
+  // The updates item now lives inside the Settings menu, so mirror the dot on
+  // the Settings button itself, where it can be seen with the menu closed.
+  el.settingsDot.classList.toggle('hidden', !updateIsPending(status));
 
   // status is always state.update (merged from every event so far) — a
   // 'downloading' progress tick carries no releaseNotes/version of its own,
@@ -4731,6 +4898,11 @@ document.addEventListener('keydown', (e) => {
       if (!el.cardContextMenu.classList.contains('hidden')) closeCardContextMenu();
       else if (!el.sleepMenu.classList.contains('hidden')) openSleepMenu(false);
       else if (!el.foldersMenu.classList.contains('hidden')) openFoldersMenu(false);
+      else if (dropdowns.some((d) => d.isOpen())) {
+        const open = dropdowns.find((d) => d.isOpen());
+        closeDropdowns();
+        open.button.focus();
+      }
       else if (!el.toast.classList.contains('hidden')) hideToast();
       else if (el.libraryView.classList.contains('hidden')) goBack();
       break;
